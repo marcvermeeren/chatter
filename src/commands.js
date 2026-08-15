@@ -5,8 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { PLUGIN_ID, herdr, liveAgents, matchLive } = require('./herdr');
-const { db, now, resolveStateDir } = require('./db');
-const { gitInfo, whoami, sendMessage, flushPending } = require('./team');
+const { db, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles } = require('./db');
+const { whoami, sendMessage, flushPending, resolveRecipient, chatUnreadCount } = require('./team');
 const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
 
 const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
@@ -14,12 +14,66 @@ const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
 // ---------------------------------------------------------------- messaging
 
 function cmdSend(me, args) {
-  const to = args[0];
-  const body = args.slice(1).join(' ').trim();
-  if (!to || !body) die('usage: chatter send <agent> <message...>');
+  const opts = parseFlags(args, { queue: false });
+  const body = opts._.slice(1).join(' ').trim();
+  if (!opts._[0] || !body) die('usage: chatter send <agent> <message...> [--queue]');
+  const to = resolveRecipient(opts._[0], { allowUnknown: opts.queue });
   if (to === me.name) die('cannot message yourself');
   const res = sendMessage(me.name, to, body);
   console.log(res.delivered ? `delivered to ${to}` : `queued: ${res.reason}`);
+}
+
+// ---------------------------------------------------------------- group chat
+
+const MENTION_RE = /@([a-z0-9_-]+)/g;
+
+function cmdPost(me, args) {
+  const body = args.join(' ').trim();
+  if (!body) die('usage: chatter post <text...>   (mention with @name; @everyone is human-only)');
+  const postId = db().prepare(
+    "INSERT INTO messages (from_agent, to_agent, body, kind, created_at, delivered_at) VALUES (?,'#chat',?,'post',?,?)"
+  ).run(me.name, body, now(), now()).lastInsertRowid;
+  const mentioned = new Set();
+  let everyone = false;
+  for (const m of body.matchAll(MENTION_RE)) {
+    if (m[1] === 'everyone') { everyone = true; continue; }
+    const hit = resolveRecipient(m[1], { soft: true });
+    if (hit && hit !== me.name) mentioned.add(hit);
+    else if (!hit) console.error(`warning: mention @${m[1]} matches no agent in this repo — not pushed`);
+  }
+  if (everyone) {
+    if (me.human) {
+      // Every live agent resolvable in this repo (registered or not).
+      for (const a of liveAgents()) {
+        if (!a.name || a.name === me.name) continue;
+        const hit = resolveRecipient(a.name, { soft: true });
+        if (hit) mentioned.add(hit);
+      }
+    } else {
+      console.error('warning: @everyone is reserved for the human — post saved, nobody was pushed');
+    }
+  }
+  const results = [];
+  for (const to of mentioned) {
+    const res = sendMessage(me.name, to, body, 'mention', `p${postId}`);
+    results.push(`${to}${res.delivered ? '' : ' (queued)'}`);
+  }
+  console.log(`posted to #chat (#${postId})${results.length ? `, pushed to ${results.join(', ')}` : ''}`);
+}
+
+function cmdChat(me, args) {
+  const opts = parseFlags(args, { limit: null, all: false });
+  const limit = opts.all ? '' : ` LIMIT ${parseInt(opts.limit, 10) || 30}`;
+  const rows = db().prepare(`SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC${limit}`).all().reverse();
+  emit(rows, () => {
+    if (!rows.length) { console.log('group chat is empty — post with: chatter post <text> (mention with @name)'); return; }
+    for (const m of rows) console.log(`#${m.id} ${m.created_at} ${m.from_agent}: ${m.body}`);
+  });
+  const maxId = rows.length ? rows[rows.length - 1].id : 0;
+  if (maxId) {
+    db().prepare(`INSERT INTO chat_reads (agent, last_read_id) VALUES (?,?)
+      ON CONFLICT(agent) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)`).run(me.name, maxId);
+  }
 }
 
 function cmdInbox(me, args) {
@@ -79,14 +133,18 @@ function cmdAgents(me) {
   const open = openQuestions();
   emit(rows, () => {
     const known = new Set(registered.map((a) => a.name));
+    const row = (mark, name, status, role, branch, tail) =>
+      `${mark} ${name.padEnd(20)} ${status.padEnd(9)} ${(role || '-').padEnd(18)} ${(branch || '-').padEnd(20)} ${tail}`.trimEnd();
     const lines = rows.map((a) =>
-      `${a.name === me.name ? '*' : ' '} ${a.name.padEnd(20)} ${a.status.padEnd(9)} ${(a.branch || '-').padEnd(24)} ${a.task ? `${a.task.id} ${a.task.title}` : ''}`.trimEnd());
+      row(a.name === me.name ? '*' : ' ', a.name, a.status, a.role, a.branch, a.task ? `${a.task.id} ${a.task.title}` : ''));
     for (const l of live) {
-      if (l.name && !known.has(l.name)) lines.push(`  ${l.name.padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (not yet on chatter)`);
-      if (!l.name) lines.push(`  ${('pane:' + l.pane_id).padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (unnamed ${l.agent || 'agent'})`);
+      if (l.name && !known.has(l.name)) lines.push(row(' ', l.name, l.agent_status, null, null, '(not yet on chatter)'));
+      if (!l.name) lines.push(row(' ', 'pane:' + l.pane_id, l.agent_status, null, null, `(unnamed ${l.agent || 'agent'})`));
     }
-    console.log(lines.length ? `  ${'NAME'.padEnd(20)} ${'STATUS'.padEnd(9)} ${'BRANCH'.padEnd(24)} TASK\n` + lines.join('\n') : 'no agents');
+    console.log(lines.length ? row(' ', 'NAME', 'STATUS', 'ROLE', 'BRANCH', 'TASK') + '\n' + lines.join('\n') : 'no agents');
     if (open.length) console.log(`\n${open.length} open question${open.length > 1 ? 's' : ''} (${open.map((q) => '#' + q.id).join(' ')}) — chatter questions`);
+    const unread = chatUnreadCount(me.name);
+    if (unread) console.log(`#chat: ${unread} unread (chatter chat)`);
   });
 }
 
@@ -138,10 +196,11 @@ function openQuestions() {
 
 function cmdAsk(me, args) {
   if (!args.length) die('usage: chatter ask [agent] <question...>');
-  const names = new Set(db().prepare('SELECT name FROM agents').all().map((r) => r.name));
-  for (const a of liveAgents()) if (a.name) names.add(a.name);
   let target = null, words = args;
-  if (args.length > 1 && names.has(args[0])) { target = args[0]; words = args.slice(1); }
+  if (args.length > 1) {
+    const hit = resolveRecipient(args[0], { soft: true });
+    if (hit) { target = hit; words = args.slice(1); }
+  }
   const text = words.join(' ').trim();
   if (!text) die('usage: chatter ask [agent] <question...>');
   const id = db().prepare('INSERT INTO notes (author, type, text, created_at) VALUES (?,?,?,?)')
@@ -235,7 +294,8 @@ function cmdTask(me, args) {
       for (const t of rows) console.log(taskLabel(t));
     });
   } else if (sub === 'assign') {
-    const [id, agent] = [args[1], args[2]];
+    const id = args[1];
+    const agent = args[2] && resolveRecipient(args[2]);
     if (!id || !agent) die('usage: chatter task assign <TASK-n> <agent>');
     const t = db().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
     if (!t) die(`${id} not found`);
@@ -272,7 +332,8 @@ function cmdHandoff(me, args) {
     return;
   }
   const opts = parseFlags(args, { summary: null, branch: null, commit: null, files: null, tests: null, next: null });
-  const [taskId, to] = [opts._[0], opts._[1]];
+  const taskId = opts._[0];
+  const to = opts._[1] && resolveRecipient(opts._[1]);
   if (!taskId || !to || !opts.summary) {
     die('usage: chatter handoff <TASK-n> <agent> --summary S [--branch B] [--commit C] [--files a,b] [--tests CMD] [--next TEXT]\n       chatter handoff show <id>');
   }
@@ -299,7 +360,9 @@ function cmdHandoff(me, args) {
 // ------------------------------------------------------------------- stats
 
 function cmdStats() {
-  const msgs = db().prepare('SELECT * FROM messages').all();
+  const allMsgs = db().prepare('SELECT * FROM messages').all();
+  const posts = allMsgs.filter((m) => m.to_agent === '#chat');
+  const msgs = allMsgs.filter((m) => m.to_agent !== '#chat');
   const tasks = db().prepare('SELECT * FROM tasks').all();
   const handoffs = db().prepare('SELECT * FROM handoffs').all();
   const notes = db().prepare('SELECT * FROM notes').all();
@@ -318,6 +381,11 @@ function cmdStats() {
       queued: msgs.filter((m) => !m.delivered_at).length,
       median_delivery: median(msgs.filter((m) => m.delivered_at).map((m) => toMs(m.delivered_at) - toMs(m.created_at))),
       by_pair: pairs,
+    },
+    chat: {
+      posts: posts.length,
+      by_author: posts.reduce((acc, p) => ((acc[p.from_agent] = (acc[p.from_agent] || 0) + 1), acc), {}),
+      mentions_pushed: msgs.filter((m) => m.kind === 'mention').length,
     },
     tasks: {
       open: tasks.filter((t) => t.status === 'open').length,
@@ -347,6 +415,7 @@ function cmdStats() {
     const s = stats;
     console.log(`messages   ${s.messages.total} total, ${s.messages.queued} queued, median delivery ${fmtDur(s.messages.median_delivery)}`);
     for (const [pair, n] of Object.entries(s.messages.by_pair)) console.log(`             ${pair}: ${n}`);
+    console.log(`#chat      ${s.chat.posts} posts (${Object.entries(s.chat.by_author).map(([a, n]) => `${a}: ${n}`).join(', ') || 'none'}), ${s.chat.mentions_pushed} mention pushes`);
     console.log(`tasks      ${s.tasks.open} open, ${s.tasks.in_progress} in progress, ${s.tasks.done} done, median open->done ${fmtDur(s.tasks.median_open_to_done)}`);
     console.log(`handoffs   ${s.handoffs.total} total, ${s.handoffs.completed} completed, median handoff->done ${fmtDur(s.handoffs.median_handoff_to_done)}`);
     console.log(`notes      ${Object.entries(s.notes.by_type).map(([t, n]) => `${n} ${t}`).join(', ') || 'none'}${s.notes.superseded ? `, ${s.notes.superseded} superseded` : ''}`);
@@ -357,11 +426,15 @@ function cmdStats() {
 // -------------------------------------------------------------------- help
 
 function help() {
-  return `chatter — Slack + shared memory for agents in this Herdr session
+  const g = gitInfo();
+  const dbPath = g.repoRoot ? repoDbFile(g.repoRoot) : `${stateRoot()}/repos/<repo>/chatter.db`;
+  return `chatter — group chat, DMs, tasks and shared memory for this repo's coding agents
 
-  chatter agents                        who's online, their branch and task
-  chatter send <agent> <message...>     message an agent (lands in their session)
+  chatter agents                        who's online: role, branch, task
+  chatter send <agent> <message...>     DM an agent (lands in their session; --queue for absent agents)
   chatter inbox [--all]                 your unread messages (--all = history)
+  chatter post <text...>                post to the repo group chat; @name pushes to that agent
+  chatter chat [--limit N] [--all]      read the group chat (marks it read)
   chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
   chatter notes [query] [--all]         read/search the shared scratchpad
   chatter resolve <note-id>             mark a note stale/superseded
@@ -377,12 +450,14 @@ function help() {
   chatter stats                         team metrics (delivery latency, tasks, questions)
   chatter whoami
 
-Record dead-ends (--type dead-end) so teammates don't repeat failed
-investigations. Answer open questions before they go stale.
+Chatter is scoped per repository: agents, chat, notes, and tasks are only
+shared within this repo (all its worktrees). Record dead-ends (--type
+dead-end) so teammates don't repeat failed investigations. Answer open
+questions before they go stale.
 
 Most read commands accept --json. Raw history: query the SQLite DB directly at
-${path.join(resolveStateDir(), 'chatter.db')}
-(tables: agents, messages, notes, tasks, handoffs).
+${dbPath}
+(tables: agents, messages, notes, tasks, handoffs, chat_reads).
 
 Code moves through Git (commit/branch refs in handoffs) — never edit another
 agent's worktree. Chatter carries context, Git carries code.`;
@@ -415,15 +490,22 @@ function ensurePointerAndSymlink() {
   }
 }
 
+// Hooks have no single repo context: flush every repo's queue.
+function flushAllRepos() {
+  let n = 0;
+  for (const f of listRepoDbFiles()) n += flushPending(openDbFile(f));
+  return n;
+}
+
 function hookStartup() {
   ensurePointerAndSymlink();
-  const n = flushPending();
+  const n = flushAllRepos();
   console.log(`chatter startup: ready${n ? `, flushed ${n} queued message(s)` : ''}`);
 }
 
 function hookFlush() {
   // Runs on pane.agent_status_changed — must be cheap when idle.
-  const n = flushPending();
+  const n = flushAllRepos();
   if (n) console.log(`flushed ${n}`);
 }
 
@@ -433,7 +515,7 @@ function hookOpenBoard() {
 }
 
 module.exports = {
-  cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami,
+  cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats,
   taskLabel, openQuestions, help,

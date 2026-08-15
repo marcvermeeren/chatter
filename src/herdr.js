@@ -3,7 +3,7 @@
 
 const { spawnSync } = require('node:child_process');
 
-const PLUGIN_ID = 'n8n.chatter';
+const PLUGIN_ID = 'chatter';
 const HERDR = process.env.HERDR_BIN_PATH || 'herdr';
 
 function herdr(args) {
@@ -28,4 +28,10 @@ const invalidateLiveAgents = () => { _live = null; };
 // Live entry for a registered agent row (by current name, else last-known pane).
 const matchLive = (live, a) => live.find((x) => x.name === a.name || x.pane_id === a.pane_id);
 
-module.exports = { PLUGIN_ID, HERDR, herdr, liveAgents, invalidateLiveAgents, matchLive };
+// Manual pane name set via `herdr pane rename` (PaneInfo.label).
+function paneLabel(paneId) {
+  const r = herdr(['pane', 'get', paneId]);
+  return (r.ok && r.json && r.json.result.pane && r.json.result.pane.label) || null;
+}
+
+module.exports = { PLUGIN_ID, HERDR, herdr, liveAgents, invalidateLiveAgents, matchLive, paneLabel };

@@ -1,9 +1,9 @@
-# Chatter — Slack for agents in Herdr
+# Chatter — group chat for coding agents in Herdr worktrees
 
-Chatter is a [Herdr](https://herdr.dev) plugin that lets coding agents running in
-separate Git worktrees collaborate like a small engineering team: direct
-messages delivered into each other's live sessions, a shared scratchpad,
-lightweight tasks, and structured handoffs.
+Chatter is a [Herdr](https://herdr.dev) plugin that lets coding agents working
+in the worktrees of one repository collaborate like a small engineering team:
+a per-repo group chat, direct messages delivered into each other's live
+sessions, a shared scratchpad, lightweight tasks, and structured handoffs.
 
 **Worktrees stay isolated for code. Chatter carries context; Git carries code.**
 Agents never touch each other's worktrees — handoffs reference branches and
@@ -11,10 +11,18 @@ commits, and the receiver cherry-picks or merges through normal Git.
 
 ```
 frontend-agent (worktree A)
-       ↕  messages / notes / tasks / handoffs   (Chatter, SQLite)
+       ↕  #chat / DMs / notes / tasks / handoffs   (Chatter, per-repo SQLite)
 backend-agent  (worktree B)
-       ⇄  commits / branches / cherry-picks     (Git)
+       ⇄  commits / branches / cherry-picks        (Git)
 ```
+
+## Scoped per repository
+
+Each repo is its own isolated universe: roster, group chat, notes, tasks —
+everything. All worktrees of one repo share it (keyed by the git common dir);
+unrelated repos can't see each other, and chatter refuses to run outside a git
+repo. This caps the blast radius of a confused or prompt-injected agent at the
+repo it lives in and keeps one project's context from bleeding into another.
 
 ## Install
 
@@ -22,13 +30,12 @@ backend-agent  (worktree B)
 herdr plugin link /path/to/herdr-chatter     # or: herdr plugin install <owner>/herdr-chatter
 ```
 
-The startup hook symlinks `chatter` into `~/.local/bin` and points bare CLI
-invocations at the plugin state directory. To prime it before the next Herdr
-restart, run once:
+The startup hook symlinks `chatter` into `~/.local/bin`. To prime it before
+the next Herdr restart, run once:
 
 ```sh
-HERDR_PLUGIN_STATE_DIR="$HOME/.local/state/herdr/plugins/n8n.chatter" \
-HERDR_PLUGIN_CONFIG_DIR="$HOME/.config/herdr/plugins/config/n8n.chatter" \
+HERDR_PLUGIN_STATE_DIR="$HOME/.local/state/herdr/plugins/chatter" \
+HERDR_PLUGIN_CONFIG_DIR="$HOME/.config/herdr/plugins/config/chatter" \
 node --no-warnings bin/chatter.js _startup
 ```
 
@@ -38,14 +45,16 @@ Requires Node ≥ 22 (built-in `node:sqlite`, zero dependencies).
 
 Agents need no skill file, MCP server, or setup. The bridge is a CLI they call
 from the shell tool they already have, and the protocol is **self-teaching**:
-every message injected into an agent's session ends with a footer showing how
-to reply and check the inbox. In testing, a fresh Claude Code instance learned
-the protocol from a single received message.
+every delivered message ends with a footer showing how to reply, check the
+inbox, and find unread group-chat posts. In testing, fresh Claude Code, Codex,
+and pi instances each learned the protocol from a single received message.
 
 ```
-chatter agents                        who's online, their branch and task
-chatter send <agent> <message...>     message an agent (lands in their session)
+chatter agents                        who's online: role, branch, task
+chatter send <agent> <message...>     DM an agent (--queue for absent agents)
 chatter inbox [--all]                 unread messages (--all = history)
+chatter post <text...>                post to the repo group chat (@name pushes)
+chatter chat [--limit N] [--all]      read the group chat (marks it read)
 chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
 chatter notes [query] [--all]         read/search the shared scratchpad
 chatter resolve <note-id>             mark a note stale
@@ -62,60 +71,55 @@ chatter stats                         team metrics
 chatter whoami | help
 ```
 
-Most read commands accept `--json` for machine-readable output, and the raw
-SQLite DB is fair game for anything the CLI doesn't cover ("read it with code,
-not with your eyes").
+Most read commands accept `--json`, and the raw per-repo SQLite DB is fair
+game for anything the CLI doesn't cover ("read it with code, not with your
+eyes").
 
-### Ideas borrowed from [arc-code](https://github.com/jerber/arc-code)
+## Identity: names you already gave
 
-- **Dead-ends are shared memory too** — `--type dead-end` records ruled-out
-  hypotheses so teammates don't repeat failed investigations.
-- **Close the uncertainty-action gap** — questions (`chatter ask`) stay open
-  and visible (in `chatter agents`, the board, `chatter questions`) until
-  someone answers them, instead of rotting in a notes file.
-- **Measure the experiment** — `chatter stats` reports delivery latency, task
-  and handoff throughput, note usage, and question response times.
-- **Greppable history** — `--json` + `log --grep` + direct SQLite access.
+The calling pane is the identity (`HERDR_PANE_ID`); registration is automatic
+on first contact. Auto-naming reads intent from existing names, most specific
+first: the **manual pane label** (`herdr pane rename` — name a pane
+`codex-codereview` and that becomes the agent's name and ROLE in the roster) →
+`<worktree-dir>-<kind>` → the cwd basename. No claim system, no status fields
+to maintain — purpose lives in the names the human already gave.
 
-Deliberately skipped (bloat control): free-text presence/status lines,
-multi-recipient send, auto-diffing in handoffs.
+Recipient names are typo-safe: unknown names are refused with suggestions
+(unique prefixes auto-resolve, `chatter send cod …` → `codex`); `--queue`
+explicitly queues for an agent that doesn't exist yet.
 
-Identity is automatic: the CLI reads `HERDR_PANE_ID`, adopts the Herdr agent
-name if one is set, otherwise derives one from the worktree directory and
-registers it via `herdr agent rename` so Herdr's sidebar and Chatter agree.
+## Group chat
+
+One `#chat` per repo, **pull-first**: posting interrupts nobody. Delivery is
+opt-in per post via mentions — `@name` pushes that post into that agent's
+session; `@everyone` pushes to all live agents and is **reserved for the
+human**, so no single agent can interrupt the whole fleet. Unread counts
+surface on touchpoints agents already hit (DM footers, `chatter agents`).
 
 ## How delivery works
 
-`chatter send` writes to SQLite, then injects the message into the target's
-live session via `herdr agent prompt` — immediately when the target is
-`idle`, `done`, or `working` (agent UIs queue typed input mid-turn), and
-**never** when the target is `blocked` (an approval dialog is open; typing
-would answer it). Blocked/offline messages queue and are flushed by:
+`chatter send` writes to SQLite, then injects into the target's live session
+via `herdr agent prompt` — immediately when the target is `idle`, `done`, or
+`working` (agent UIs queue typed input mid-turn), never when `blocked` (an
+approval dialog is open). Queued messages are flushed by a plugin event hook
+on `pane.agent_status_changed`, by any chatter command, and by the startup
+hook — across every repo's queue. No daemon.
 
-1. a plugin event hook on `pane.agent_status_changed` (fires when any agent settles),
-2. any `chatter` command run by anyone, and
-3. the plugin startup hook after a session restart.
-
-No daemon. Handoffs additionally update task ownership, drop an audit note,
-and send a one-line notification pointing at `chatter handoff show <id>` for
-the full structured payload.
-
-## Board
-
-A read-only popup dashboard (agents + status, tasks, shared memory, recent
-messages):
+## Human views
 
 ```sh
-herdr plugin pane open --plugin n8n.chatter --entrypoint board
+herdr plugin pane open --plugin chatter --entrypoint chat    # full-height group chat
+herdr plugin pane open --plugin chatter --entrypoint board   # chat-first overview
 ```
 
-or bind it:
+Both auto-refresh, show the focused workspace's repo, switch repos with number
+keys, and close with `q`. Suggested keybinding:
 
 ```toml
 [[keys.command]]
 key = "prefix+alt+c"
 type = "plugin_action"
-command = "n8n.chatter.open-board"
+command = "chatter.open-board"
 description = "chatter board"
 ```
 
@@ -127,49 +131,39 @@ your machine, against your Herdr session. Within that boundary:
 - Delivered messages are *deliberate prompt injection between cooperating
   agents* — a message becomes input in the recipient's session. Only run
   agents you'd trust to type into each other's terminals.
+- Per-repo scoping is **soft isolation**, not a wall: it stops confused or
+  ambiently-injected agents from reaching across projects, but a genuinely
+  malicious process doesn't need chatter — Herdr's own CLI can prompt any
+  pane. The hard boundaries remain your user account and machine.
 - Injected text is sanitized (control/ANSI characters stripped so a message
   can't visually forge the `[chatter]` framing) and capped at ~700 chars; the
   full original always stays in the DB (`chatter inbox --all`).
-- Delivery never targets a `blocked` agent (its dialog would swallow the text)
-  and claims each message atomically, so concurrent flush hooks can't
-  double-deliver or hit a stale pane now owned by a different agent.
-- Identity is honor-system per pane: any process in a Herdr pane can speak as
-  that pane's agent. There is no cross-user or network exposure — no sockets
-  are opened, all SQL is parameterized, and every subprocess uses argv arrays
-  (no shell interpolation).
+- Delivery claims each message atomically (no double-delivery from concurrent
+  hooks) and refuses stale panes now owned by a different agent.
+- Identity is honor-system per pane. No network exposure — no sockets opened,
+  all SQL parameterized, every subprocess uses argv arrays (no shell).
 
 ## Code layout
 
 ```
-bin/chatter      sh wrapper        bin/chatter.js   entry + dispatch
-src/util.js      flags, output, time   src/db.js    state dir, schema
-src/herdr.js     herdr CLI + roster cache   src/team.js  identity + delivery
-src/commands.js  all commands + hooks       src/board.js dashboard
+bin/chatter      sh wrapper             bin/chatter.js   entry + dispatch
+src/util.js      flags, output, time    src/db.js        per-repo DBs, schema
+src/herdr.js     herdr CLI + roster     src/team.js      identity + delivery
+src/commands.js  commands + hooks       src/board.js     board + chat views
 ```
 
 ## Herdr surface used (verified on 0.8.0 / protocol 19)
 
-- `agent list / rename / prompt / wait / read` — discovery, naming, delivery
+- `agent list / rename / prompt / wait / read`, `pane get` (labels)
 - `HERDR_PANE_ID` / `HERDR_ENV` in every managed pane — zero-arg caller identity
-- `HERDR_PLUGIN_STATE_DIR` — SQLite home (`chatter.db`), shared across all worktrees
+- `HERDR_PLUGIN_STATE_DIR` — per-repo SQLite DBs under `repos/<key>/chatter.db`
 - `[[startup]]`, `[[events]] on = "pane.agent_status_changed"`, `[[panes]]`, `[[actions]]`
-- `herdr notification show` available for human toasts (not used yet)
-
-### Known limitations / missing Herdr hooks
-
-- Herdr cannot observe or intercept an agent's conversation content, and plugin
-  v1 has no way to register native agent tools/MCP — hence the CLI bridge.
-- Startup hooks must exit (no supervised daemons) — delivery is therefore
-  synchronous + event-hook-flushed rather than watcher-based.
-- `unknown` agent status is treated as deliverable (input queues); `blocked`
-  defers. There is no per-agent "do not disturb".
-- Popup panes have no pane ID and emit no lifecycle events (fine for the
-  read-only board).
 
 ## The experiment
 
 Chatter exists to answer product questions, not just route bytes: do agents
 proactively ask each other questions, share discoveries, and hand off instead
 of duplicating work? Does shared memory reduce repeated investigation? Do they
-over-communicate? Watch `chatter log`, the notes table, and the board while
-running multi-agent work, and prune primitives that go unused.
+over-communicate? `chatter stats` measures exactly these: message and post
+volume per author, delivery latency, handoff completion time, dead-ends
+recorded, question response times. Prune primitives that go unused.

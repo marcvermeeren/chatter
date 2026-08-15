@@ -7,7 +7,7 @@
 const { setJsonOut, die } = require('../src/util');
 const { whoami, flushPending } = require('../src/team');
 const c = require('../src/commands');
-const { cmdBoard } = require('../src/board');
+const { cmdBoard, cmdChatView } = require('../src/board');
 
 const argv = process.argv.slice(2).filter((a) => {
   if (a === '--json') { setJsonOut(true); return false; }
@@ -16,13 +16,13 @@ const argv = process.argv.slice(2).filter((a) => {
 const [cmd, ...args] = argv;
 
 // Plugin entrypoints (run with plugin env, not by agents) and the board pane.
-const HOOKS = { _startup: c.hookStartup, _flush: c.hookFlush, _open_board: c.hookOpenBoard, board: cmdBoard };
+const HOOKS = { _startup: c.hookStartup, _flush: c.hookFlush, _open_board: c.hookOpenBoard, board: cmdBoard, _chat_view: cmdChatView };
 if (Object.hasOwn(HOOKS, cmd ?? '')) { HOOKS[cmd](); return; }
 
 if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') { console.log(c.help()); return; }
 
 const COMMANDS = {
-  agents: c.cmdAgents, send: c.cmdSend, inbox: c.cmdInbox,
+  agents: c.cmdAgents, send: c.cmdSend, inbox: c.cmdInbox, post: c.cmdPost, chat: c.cmdChat,
   note: c.cmdNote, notes: c.cmdNotes, search: c.cmdNotes, resolve: c.cmdResolve,
   ask: c.cmdAsk, answer: c.cmdAnswer, questions: c.cmdQuestions,
   task: c.cmdTask, handoff: c.cmdHandoff,

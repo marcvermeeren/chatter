@@ -1,8 +1,8 @@
-id = "n8n.chatter"
+id = "chatter"
 name = "Chatter"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.8.0"
-description = "Slack for agents: cross-worktree messages, shared notes, tasks, and handoffs"
+description = "Group chat for coding agents: cross-worktree messages, shared notes, tasks, and handoffs"
 platforms = ["linux", "macos"]
 
 [[startup]]
@@ -25,3 +25,11 @@ placement = "popup"
 width = "80%"
 height = "80%"
 command = ["node", "--no-warnings", "bin/chatter.js", "board"]
+
+[[panes]]
+id = "chat"
+title = "Chatter group chat"
+placement = "popup"
+width = "70%"
+height = "80%"
+command = ["node", "--no-warnings", "bin/chatter.js", "_chat_view"]

@@ -1,20 +1,14 @@
 'use strict';
 // Who agents are (identity) and how messages move between them (delivery).
+// Everything here operates within ONE repo's DB; cross-repo delivery is
+// deliberately refused.
 
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { herdr, liveAgents, invalidateLiveAgents } = require('./herdr');
-const { db, now } = require('./db');
+const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
+const { db, now, gitInfo } = require('./db');
+const { die } = require('./util');
 
 // ---------------------------------------------------------------- identity
-
-function gitInfo(cwd) {
-  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD', '--show-toplevel'],
-    { encoding: 'utf8' });
-  if (r.status !== 0) return { branch: null, repo_root: null };
-  const [branch, repo_root] = r.stdout.trim().split('\n');
-  return { branch: branch || null, repo_root: repo_root || null };
-}
 
 function sanitizeName(s) {
   const n = (s || '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z]+/, '').slice(0, 32);
@@ -22,16 +16,19 @@ function sanitizeName(s) {
 }
 
 // Identify the calling pane's agent; auto-register on first contact.
+// Naming ladder: manual pane label > <worktree-dir>-<kind> > cwd basename.
 function whoami() {
   const paneId = process.env.HERDR_PANE_ID;
   if (!paneId) return { name: 'user', paneId: null, human: true };
   const live = liveAgents();
   const me = live.find((a) => a.pane_id === paneId);
+  const label = paneLabel(paneId);
   let name = me && me.name;
   if (!name) {
-    // Derive a stable name and tell Herdr so both sides agree.
-    const cwd = (me && me.cwd) || process.cwd();
-    const base = sanitizeName(path.basename(cwd));
+    const g = gitInfo();
+    const base = label ? sanitizeName(label)
+      : g.toplevel ? sanitizeName(`${path.basename(g.toplevel)}-${(me && me.agent) || 'agent'}`)
+      : sanitizeName(path.basename(process.cwd()));
     const taken = new Set(live.map((a) => a.name).filter(Boolean));
     let candidate = base, i = 2;
     while (taken.has(candidate)) candidate = `${base}-${i++}`.slice(0, 32);
@@ -41,17 +38,60 @@ function whoami() {
     }
   }
   if (!name) return { name: `pane:${paneId}`, paneId, human: false };
-  const cwd = (me && me.cwd) || process.cwd();
-  const git = gitInfo(cwd);
+  const g = gitInfo();
   db().prepare(`
-    INSERT INTO agents (name, pane_id, workspace_id, cwd, repo_root, branch, kind, registered_at, last_seen_at)
-    VALUES (?,?,?,?,?,?,?,?,?)
+    INSERT INTO agents (name, pane_id, workspace_id, cwd, repo_root, branch, kind, role, registered_at, last_seen_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(name) DO UPDATE SET pane_id=excluded.pane_id, workspace_id=excluded.workspace_id,
       cwd=excluded.cwd, repo_root=excluded.repo_root, branch=excluded.branch,
-      kind=excluded.kind, last_seen_at=excluded.last_seen_at
-  `).run(name, paneId, me ? me.workspace_id : null, cwd, git.repo_root, git.branch,
-         me ? me.agent : null, now(), now());
+      kind=excluded.kind, role=excluded.role, last_seen_at=excluded.last_seen_at
+  `).run(name, paneId, me ? me.workspace_id : null, process.cwd(), g.repoRoot, g.branch,
+         me ? me.agent : null, label, now(), now());
   return { name, paneId, human: false, status: me ? me.agent_status : null };
+}
+
+// -------------------------------------------------- recipient resolution
+
+function editDistance(a, b) {
+  const m = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) m[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return m[a.length][b.length];
+}
+
+function rosterNames() {
+  return db().prepare('SELECT name FROM agents').all().map((r) => r.name);
+}
+
+// Resolve a user-typed recipient against this repo's roster (plus live agents
+// verifiably in this repo). Exact > unique prefix > refuse-with-suggestions.
+// { allowUnknown: true } queues for a not-yet-existing exact name (--queue).
+function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
+  const candidates = new Set(rosterNames());
+  if (candidates.has(input)) return input; // hot path: registered exact match
+  // Live named agents not yet registered join the candidate pool only if
+  // their pane's cwd belongs to this repo (keeps per-repo isolation).
+  const ourRepo = gitInfo().repoRoot;
+  for (const a of liveAgents()) {
+    if (a.name && !candidates.has(a.name) && a.cwd && gitInfo(a.cwd).repoRoot === ourRepo) {
+      candidates.add(a.name);
+    }
+  }
+  if (candidates.has(input)) return input;
+  const lower = input.toLowerCase();
+  const prefix = [...candidates].filter((n) => n.toLowerCase().startsWith(lower));
+  if (prefix.length === 1) return prefix[0];
+  if (soft) return null;
+  if (allowUnknown) return input;
+  const near = [...candidates].filter((n) =>
+    prefix.includes(n) || n.toLowerCase().includes(lower) || editDistance(n.toLowerCase(), lower) <= 2);
+  const hint = near.length ? `did you mean: ${near.join(', ')}?`
+    : candidates.size ? `known agents: ${[...candidates].join(', ')}` : 'no agents registered in this repo yet';
+  die(`no agent "${input}" in this repo — ${hint}\n(use --queue with the exact name to queue for an agent that doesn't exist yet)`);
 }
 
 // ---------------------------------------------------------------- delivery
@@ -60,12 +100,12 @@ function whoami() {
 // one is showing a dialog that our text would answer.
 const DELIVERABLE = new Set(['idle', 'done', 'working', 'unknown']);
 
-function resolveTarget(name, live) {
+function resolveTarget(name, live, d = db()) {
   const byName = live.find((x) => x.name === name);
   if (byName) return { paneId: byName.pane_id, status: byName.agent_status };
   // Last-known pane, but only if it isn't now occupied by a differently-named
   // agent — otherwise the message would land in the wrong session.
-  const row = db().prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
+  const row = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
   if (row) {
     const atPane = live.find((x) => x.pane_id === row.pane_id);
     if (atPane && !atPane.name) return { paneId: atPane.pane_id, status: atPane.agent_status };
@@ -82,36 +122,44 @@ function deliveryText(body) {
   return t;
 }
 
-function formatDelivery(msg) {
-  const head = msg.kind === 'handoff'
-    ? `[chatter] handoff from ${msg.from_agent}`
+function chatUnreadCount(agent, d = db()) {
+  const p = d.prepare('SELECT last_read_id FROM chat_reads WHERE agent = ?').get(agent);
+  return d.prepare("SELECT COUNT(*) AS n FROM messages WHERE to_agent = '#chat' AND from_agent != ? AND id > ?")
+    .get(agent, (p && p.last_read_id) || 0).n;
+}
+
+function formatDelivery(msg, d = db()) {
+  const head = msg.kind === 'handoff' ? `[chatter] handoff from ${msg.from_agent}`
+    : msg.kind === 'mention' ? `[chatter] #chat mention from ${msg.from_agent}`
     : `[chatter] message from ${msg.from_agent}`;
-  return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — reply: chatter send ${msg.from_agent} "..." | inbox: chatter inbox | all commands: chatter help)`;
+  const unread = chatUnreadCount(msg.to_agent, d);
+  const chat = unread ? ` | #chat: ${unread} unread (chatter chat)` : '';
+  return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — reply: chatter send ${msg.from_agent} "..." | inbox: chatter inbox${chat} | all commands: chatter help)`;
 }
 
 // Inject one message into its target's live session. Claims the message
 // atomically first so concurrent flushes (event hooks) can't double-deliver.
-function tryDeliver(msg, live) {
-  const t = resolveTarget(msg.to_agent, live);
+function tryDeliver(msg, live, d = db()) {
+  const t = resolveTarget(msg.to_agent, live, d);
   if (!t || !DELIVERABLE.has(t.status)) return false;
-  const claim = db().prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
+  const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
     .run(now(), msg.id);
   if (claim.changes !== 1) return false; // another process got it
-  if (!herdr(['agent', 'prompt', t.paneId, formatDelivery(msg)]).ok) {
-    db().prepare('UPDATE messages SET delivered_at = NULL WHERE id = ?').run(msg.id);
+  if (!herdr(['agent', 'prompt', t.paneId, formatDelivery(msg, d)]).ok) {
+    d.prepare('UPDATE messages SET delivered_at = NULL WHERE id = ?').run(msg.id);
     return false;
   }
-  db().prepare('UPDATE messages SET read_at = ? WHERE id = ?').run(now(), msg.id);
+  d.prepare('UPDATE messages SET read_at = ? WHERE id = ?').run(now(), msg.id);
   return true;
 }
 
-// Best-effort flush of everything queued; zero subprocesses when queue is empty.
-function flushPending() {
-  const pending = db().prepare('SELECT * FROM messages WHERE delivered_at IS NULL ORDER BY id').all();
+// Best-effort flush of one repo's queue; zero subprocesses when it's empty.
+function flushPending(d = db()) {
+  const pending = d.prepare('SELECT * FROM messages WHERE delivered_at IS NULL ORDER BY id').all();
   if (!pending.length) return 0;
   const live = liveAgents();
   let n = 0;
-  for (const m of pending) if (tryDeliver(m, live)) n++;
+  for (const m of pending) if (tryDeliver(m, live, d)) n++;
   return n;
 }
 
@@ -122,9 +170,12 @@ function sendMessage(from, to, body, kind = 'chat', refId = null) {
   const msg = { id: r.lastInsertRowid, from_agent: from, to_agent: to, body, kind, ref_id: refId };
   const live = liveAgents();
   const t = resolveTarget(to, live);
-  if (!t) return { delivered: false, reason: `no live agent named "${to}" — queued (they'll get it via chatter inbox or when they appear)` };
+  if (!t) return { delivered: false, reason: `"${to}" has no live pane — queued (they'll get it via chatter inbox or when they appear)` };
   if (tryDeliver(msg, live)) return { delivered: true };
   return { delivered: false, reason: `${to} is ${t.status} — queued, will deliver when they settle` };
 }
 
-module.exports = { gitInfo, sanitizeName, whoami, resolveTarget, formatDelivery, tryDeliver, flushPending, sendMessage };
+module.exports = {
+  sanitizeName, whoami, resolveRecipient, resolveTarget,
+  formatDelivery, tryDeliver, flushPending, sendMessage, chatUnreadCount,
+};
