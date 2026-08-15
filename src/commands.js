@@ -1,0 +1,441 @@
+'use strict';
+// Agent-facing commands and plugin hooks.
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { PLUGIN_ID, herdr, liveAgents, matchLive } = require('./herdr');
+const { db, now, resolveStateDir } = require('./db');
+const { gitInfo, whoami, sendMessage, flushPending } = require('./team');
+const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
+
+const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
+
+// ---------------------------------------------------------------- messaging
+
+function cmdSend(me, args) {
+  const to = args[0];
+  const body = args.slice(1).join(' ').trim();
+  if (!to || !body) die('usage: chatter send <agent> <message...>');
+  if (to === me.name) die('cannot message yourself');
+  const res = sendMessage(me.name, to, body);
+  console.log(res.delivered ? `delivered to ${to}` : `queued: ${res.reason}`);
+}
+
+function cmdInbox(me, args) {
+  const opts = parseFlags(args, { all: false });
+  const rows = opts.all
+    ? db().prepare('SELECT * FROM messages WHERE to_agent = ? OR from_agent = ? ORDER BY id DESC LIMIT 50').all(me.name, me.name).reverse()
+    : db().prepare('SELECT * FROM messages WHERE to_agent = ? AND read_at IS NULL ORDER BY id').all(me.name);
+  emit(rows, () => {
+    if (!rows.length) { console.log(opts.all ? 'no messages' : 'no unread messages'); return; }
+    for (const m of rows) {
+      const tag = m.kind === 'chat' ? '' : ` [${m.kind}${m.ref_id ? ' ' + m.ref_id : ''}]`;
+      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}${tag}: ${m.body}`);
+    }
+  });
+  if (!opts.all && rows.length) {
+    db().prepare(`UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id IN (${rows.map((m) => m.id).join(',')})`)
+      .run(now(), now());
+  }
+}
+
+function cmdLog(_me, args) {
+  const opts = parseFlags(args, { grep: null, task: null, limit: null, all: false });
+  const cond = ['1=1'], params = [];
+  if (opts.task) { cond.push('ref_id = ?'); params.push(opts.task); }
+  const limit = opts.all ? '' : ` LIMIT ${parseInt(opts.limit, 10) || 40}`;
+  let rows = db().prepare(`SELECT * FROM messages WHERE ${cond.join(' AND ')} ORDER BY id DESC${limit}`).all(...params);
+  if (opts.grep) {
+    let re; try { re = new RegExp(opts.grep, 'i'); } catch { re = null; }
+    rows = rows.filter((m) => re
+      ? re.test(m.body) || re.test(m.from_agent) || re.test(m.to_agent)
+      : (m.body + m.from_agent + m.to_agent).toLowerCase().includes(opts.grep.toLowerCase()));
+  }
+  emit(rows, () => {
+    for (const m of [...rows].reverse()) {
+      const st = m.read_at ? '' : m.delivered_at ? ' (unread)' : ' (queued)';
+      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}: ${m.body}${st}`);
+    }
+    if (!rows.length) console.log('no messages match');
+  });
+}
+
+// ------------------------------------------------------------------ roster
+
+function inProgressTasksByAssignee() {
+  const rows = db().prepare("SELECT assignee, id, title FROM tasks WHERE status = 'in_progress'").all();
+  return Object.fromEntries(rows.map((t) => [t.assignee, t]));
+}
+
+function cmdAgents(me) {
+  const live = liveAgents();
+  const registered = db().prepare('SELECT * FROM agents ORDER BY name').all();
+  const taskBy = inProgressTasksByAssignee();
+  const rows = registered.map((a) => {
+    const l = matchLive(live, a);
+    return { ...a, status: l ? l.agent_status : 'offline', task: taskBy[a.name] || null };
+  });
+  const open = openQuestions();
+  emit(rows, () => {
+    const known = new Set(registered.map((a) => a.name));
+    const lines = rows.map((a) =>
+      `${a.name === me.name ? '*' : ' '} ${a.name.padEnd(20)} ${a.status.padEnd(9)} ${(a.branch || '-').padEnd(24)} ${a.task ? `${a.task.id} ${a.task.title}` : ''}`.trimEnd());
+    for (const l of live) {
+      if (l.name && !known.has(l.name)) lines.push(`  ${l.name.padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (not yet on chatter)`);
+      if (!l.name) lines.push(`  ${('pane:' + l.pane_id).padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (unnamed ${l.agent || 'agent'})`);
+    }
+    console.log(lines.length ? `  ${'NAME'.padEnd(20)} ${'STATUS'.padEnd(9)} ${'BRANCH'.padEnd(24)} TASK\n` + lines.join('\n') : 'no agents');
+    if (open.length) console.log(`\n${open.length} open question${open.length > 1 ? 's' : ''} (${open.map((q) => '#' + q.id).join(' ')}) — chatter questions`);
+  });
+}
+
+function cmdWhoami(me) {
+  console.log(`${me.name}${me.paneId ? ` (pane ${me.paneId})` : ' (not inside a Herdr pane)'}`);
+}
+
+// ------------------------------------------------------------------- notes
+
+function cmdNote(me, args) {
+  const opts = parseFlags(args, { type: 'note', task: null, commit: null });
+  const text = opts._.join(' ').trim();
+  if (!text) die('usage: chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]');
+  if (!NOTE_TYPES.includes(opts.type)) console.error(`warning: unusual note type "${opts.type}" (known: ${NOTE_TYPES.join(', ')})`);
+  const r = db().prepare('INSERT INTO notes (author, type, text, task_id, commit_sha, created_at) VALUES (?,?,?,?,?,?)')
+    .run(me.name, opts.type, text, opts.task, opts.commit, now());
+  console.log(`note #${r.lastInsertRowid} saved`);
+}
+
+function cmdNotes(_me, args) {
+  const opts = parseFlags(args, { all: false });
+  const q = opts._.join(' ').trim();
+  const where = opts.all ? '1=1' : "status = 'active'";
+  const rows = q
+    ? db().prepare(`SELECT * FROM notes WHERE ${where} AND text LIKE ? ORDER BY id DESC LIMIT 100`).all(`%${q}%`)
+    : db().prepare(`SELECT * FROM notes WHERE ${where} ORDER BY id DESC LIMIT 100`).all();
+  emit(rows, () => {
+    if (!rows.length) { console.log(q ? `no notes matching "${q}"` : 'no notes yet'); return; }
+    for (const n of [...rows].reverse()) {
+      const refs = [n.task_id, n.commit_sha && n.commit_sha.slice(0, 8)].filter(Boolean).join(' ');
+      const st = n.status === 'active' ? '' : ` (${n.status}${n.superseded_by ? ` by #${n.superseded_by}` : ''})`;
+      console.log(`#${n.id} [${n.type}] ${n.author}: ${n.text}${refs ? `  (${refs})` : ''}${st}`);
+    }
+  });
+}
+
+function cmdResolve(_me, args) {
+  const id = parseInt(args[0], 10);
+  if (!id) die('usage: chatter resolve <note-id>');
+  const r = db().prepare("UPDATE notes SET status = 'superseded' WHERE id = ? AND status = 'active'").run(id);
+  console.log(r.changes ? `note #${id} marked superseded` : `note #${id} not found or already resolved`);
+}
+
+// --------------------------------------------------------------- questions
+
+function openQuestions() {
+  return db().prepare("SELECT * FROM notes WHERE type = 'question' AND status = 'active' ORDER BY id").all();
+}
+
+function cmdAsk(me, args) {
+  if (!args.length) die('usage: chatter ask [agent] <question...>');
+  const names = new Set(db().prepare('SELECT name FROM agents').all().map((r) => r.name));
+  for (const a of liveAgents()) if (a.name) names.add(a.name);
+  let target = null, words = args;
+  if (args.length > 1 && names.has(args[0])) { target = args[0]; words = args.slice(1); }
+  const text = words.join(' ').trim();
+  if (!text) die('usage: chatter ask [agent] <question...>');
+  const id = db().prepare('INSERT INTO notes (author, type, text, created_at) VALUES (?,?,?,?)')
+    .run(me.name, 'question', text, now()).lastInsertRowid;
+  let out = `question #${id} opened`;
+  if (target) {
+    const res = sendMessage(me.name, target, `question #${id}: ${text} (answer with: chatter answer ${id} "...")`, 'system', `q${id}`);
+    out += res.delivered ? `, delivered to ${target}` : `, queued for ${target} (${res.reason})`;
+  } else {
+    out += ' (open to anyone — visible in chatter questions)';
+  }
+  console.log(out);
+}
+
+function cmdAnswer(me, args) {
+  const id = parseInt(args[0], 10);
+  const text = args.slice(1).join(' ').trim();
+  if (!id || !text) die('usage: chatter answer <question-id> <text...>');
+  const q = db().prepare("SELECT * FROM notes WHERE id = ? AND type = 'question'").get(id);
+  if (!q) die(`question #${id} not found`);
+  if (q.status !== 'active') die(`question #${id} is already ${q.status}`);
+  const replyId = db().prepare('INSERT INTO notes (author, type, text, created_at) VALUES (?,?,?,?)')
+    .run(me.name, 'note', `answer to #${id}: ${text}`, now()).lastInsertRowid;
+  db().prepare("UPDATE notes SET status = 'resolved', superseded_by = ? WHERE id = ?").run(replyId, id);
+  let out = `question #${id} answered (note #${replyId})`;
+  if (q.author !== me.name) {
+    const res = sendMessage(me.name, q.author, `answer to your question #${id} ("${q.text}"): ${text}`, 'system', `q${id}`);
+    out += res.delivered ? `, delivered to ${q.author}` : `, queued for ${q.author}`;
+  }
+  console.log(out);
+}
+
+function cmdQuestions(_me, args) {
+  const opts = parseFlags(args, { all: false });
+  if (!opts.all) {
+    const rows = openQuestions();
+    emit(rows, () => {
+      if (!rows.length) { console.log('no open questions'); return; }
+      for (const r of rows) console.log(`#${r.id} (${age(r.created_at)} old) ${r.author}: ${r.text}  (answer: chatter answer ${r.id} "...")`);
+    });
+    return;
+  }
+  const rows = db().prepare("SELECT * FROM notes WHERE type = 'question' ORDER BY id").all();
+  const answerIds = rows.map((r) => r.superseded_by).filter(Boolean);
+  const answers = answerIds.length
+    ? Object.fromEntries(db().prepare(`SELECT * FROM notes WHERE id IN (${answerIds.join(',')})`).all().map((a) => [a.id, a]))
+    : {};
+  emit(rows.map((r) => ({ ...r, answer: answers[r.superseded_by] || null })), () => {
+    if (!rows.length) { console.log('no questions'); return; }
+    for (const r of rows) {
+      console.log(`#${r.id} [${r.status}] ${r.author}: ${r.text}`);
+      const a = answers[r.superseded_by];
+      if (a) console.log(`    -> ${a.author}: ${a.text.replace(/^answer to #\d+: /, '')}`);
+    }
+  });
+}
+
+// ------------------------------------------------------------------- tasks
+
+function taskLabel(t) {
+  const mark = t.status === 'done' ? 'x' : t.status === 'in_progress' ? '>' : ' ';
+  return `[${mark}] ${t.id} ${t.title}${t.assignee ? `  (@${t.assignee})` : ''}${t.commit_sha ? `  ${t.commit_sha.slice(0, 8)}` : ''}`;
+}
+
+function nextTaskId() {
+  const row = db().prepare("SELECT MAX(CAST(substr(id, 6) AS INTEGER)) AS n FROM tasks").get();
+  return `TASK-${(row.n || 0) + 1}`;
+}
+
+function notifyAssignment(me, task) {
+  if (task.assignee && task.assignee !== me.name) {
+    sendMessage(me.name, task.assignee, `you were assigned ${task.id}: ${task.title} (details: chatter task list)`, 'system', task.id);
+  }
+}
+
+function cmdTask(me, args) {
+  const sub = args[0];
+  if (sub === 'create') {
+    const opts = parseFlags(args.slice(1), { assignee: null });
+    const title = opts._.join(' ').trim();
+    if (!title) die('usage: chatter task create <title> [--assignee agent]');
+    const id = nextTaskId();
+    db().prepare('INSERT INTO tasks (id, title, status, assignee, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
+      .run(id, title, opts.assignee ? 'in_progress' : 'open', opts.assignee, me.name, now(), now());
+    console.log(`${id} created${opts.assignee ? ` and assigned to ${opts.assignee}` : ''}`);
+    notifyAssignment(me, { id, title, assignee: opts.assignee });
+  } else if (sub === 'list') {
+    const rows = db().prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id").all();
+    emit(rows, () => {
+      if (!rows.length) { console.log('no tasks'); return; }
+      for (const t of rows) console.log(taskLabel(t));
+    });
+  } else if (sub === 'assign') {
+    const [id, agent] = [args[1], args[2]];
+    if (!id || !agent) die('usage: chatter task assign <TASK-n> <agent>');
+    const t = db().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    if (!t) die(`${id} not found`);
+    db().prepare("UPDATE tasks SET assignee = ?, status = 'in_progress', updated_at = ? WHERE id = ?").run(agent, now(), id);
+    console.log(`${id} assigned to ${agent}`);
+    notifyAssignment(me, { ...t, assignee: agent });
+  } else if (sub === 'done') {
+    const opts = parseFlags(args.slice(1), { commit: null });
+    const id = opts._[0];
+    if (!id) die('usage: chatter task done <TASK-n> [--commit SHA]');
+    const r = db().prepare("UPDATE tasks SET status = 'done', commit_sha = COALESCE(?, commit_sha), updated_at = ? WHERE id = ?").run(opts.commit, now(), id);
+    if (!r.changes) die(`${id} not found`);
+    db().prepare("UPDATE handoffs SET status = 'done' WHERE task_id = ? AND status != 'done'").run(id);
+    console.log(`${id} done${opts.commit ? ` (${opts.commit.slice(0, 8)})` : ''}`);
+  } else {
+    die('usage: chatter task create|list|assign|done ...');
+  }
+}
+
+// ---------------------------------------------------------------- handoffs
+
+function cmdHandoff(me, args) {
+  if (args[0] === 'show') {
+    const h = db().prepare('SELECT * FROM handoffs WHERE id = ?').get(parseInt(args[1], 10));
+    if (!h) die(`handoff h${args[1]} not found`);
+    const t = h.task_id ? db().prepare('SELECT * FROM tasks WHERE id = ?').get(h.task_id) : null;
+    console.log(JSON.stringify({
+      id: `h${h.id}`, task: h.task_id, task_title: t ? t.title : undefined,
+      from: h.from_agent, to: h.to_agent, summary: h.summary,
+      branch: h.branch, commit: h.commit_sha,
+      files: h.files_json ? JSON.parse(h.files_json) : [],
+      tests: h.tests, next: h.next_steps, status: h.status, created_at: h.created_at,
+    }, null, 2));
+    return;
+  }
+  const opts = parseFlags(args, { summary: null, branch: null, commit: null, files: null, tests: null, next: null });
+  const [taskId, to] = [opts._[0], opts._[1]];
+  if (!taskId || !to || !opts.summary) {
+    die('usage: chatter handoff <TASK-n> <agent> --summary S [--branch B] [--commit C] [--files a,b] [--tests CMD] [--next TEXT]\n       chatter handoff show <id>');
+  }
+  const task = db().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!task) die(`${taskId} not found — create it first: chatter task create <title>`);
+  // Fill git context from the caller's worktree when not given explicitly.
+  const branch = opts.branch || gitInfo(process.cwd()).branch;
+  const files = opts.files ? opts.files.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const hid = db().prepare(`INSERT INTO handoffs (task_id, from_agent, to_agent, summary, branch, commit_sha, files_json, tests, next_steps, created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(taskId, me.name, to, opts.summary, branch, opts.commit, JSON.stringify(files), opts.tests, opts.next, now()).lastInsertRowid;
+  db().prepare("UPDATE tasks SET assignee = ?, status = 'in_progress', updated_at = ? WHERE id = ?").run(to, now(), taskId);
+  db().prepare('INSERT INTO notes (author, type, text, task_id, commit_sha, created_at) VALUES (?,?,?,?,?,?)')
+    .run(me.name, 'note', `handed off ${taskId} to ${to}: ${opts.summary}`, taskId, opts.commit, now());
+  const parts = [`${taskId} ${opts.summary}`];
+  if (branch) parts.push(`branch ${branch}`);
+  if (opts.commit) parts.push(`commit ${opts.commit.slice(0, 12)}`);
+  if (opts.next) parts.push(`next: ${opts.next}`);
+  parts.push(`full details: chatter handoff show ${hid}`);
+  const res = sendMessage(me.name, to, parts.join(' | '), 'handoff', `h${hid}`);
+  console.log(`h${hid} created; ${res.delivered ? `delivered to ${to}` : `queued: ${res.reason}`}`);
+}
+
+// ------------------------------------------------------------------- stats
+
+function cmdStats() {
+  const msgs = db().prepare('SELECT * FROM messages').all();
+  const tasks = db().prepare('SELECT * FROM tasks').all();
+  const handoffs = db().prepare('SELECT * FROM handoffs').all();
+  const notes = db().prepare('SELECT * FROM notes').all();
+  const pairs = {};
+  for (const m of msgs) pairs[`${m.from_agent} -> ${m.to_agent}`] = (pairs[`${m.from_agent} -> ${m.to_agent}`] || 0) + 1;
+  const byType = {};
+  for (const n of notes) byType[n.type] = (byType[n.type] || 0) + 1;
+  const qs = notes.filter((n) => n.type === 'question');
+  const qAnswered = qs.filter((q) => q.status === 'resolved' && q.superseded_by);
+  const noteById = new Map(notes.map((n) => [n.id, n]));
+  const openQs = qs.filter((q) => q.status === 'active');
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const stats = {
+    messages: {
+      total: msgs.length,
+      queued: msgs.filter((m) => !m.delivered_at).length,
+      median_delivery: median(msgs.filter((m) => m.delivered_at).map((m) => toMs(m.delivered_at) - toMs(m.created_at))),
+      by_pair: pairs,
+    },
+    tasks: {
+      open: tasks.filter((t) => t.status === 'open').length,
+      in_progress: tasks.filter((t) => t.status === 'in_progress').length,
+      done: tasks.filter((t) => t.status === 'done').length,
+      median_open_to_done: median(tasks.filter((t) => t.status === 'done').map((t) => toMs(t.updated_at) - toMs(t.created_at))),
+    },
+    handoffs: {
+      total: handoffs.length,
+      completed: handoffs.filter((h) => h.status === 'done').length,
+      median_handoff_to_done: median(handoffs.filter((h) => h.status === 'done' && taskById.get(h.task_id))
+        .map((h) => toMs(taskById.get(h.task_id).updated_at) - toMs(h.created_at))),
+    },
+    notes: {
+      by_type: byType,
+      superseded: notes.filter((n) => n.status !== 'active' && n.type !== 'question').length,
+    },
+    questions: {
+      open: openQs.length,
+      resolved: qAnswered.length,
+      median_time_to_answer: median(qAnswered.filter((q) => noteById.get(q.superseded_by))
+        .map((q) => toMs(noteById.get(q.superseded_by).created_at) - toMs(q.created_at))),
+      oldest_open_age_ms: openQs.length ? Date.now() - toMs(openQs[0].created_at) : null,
+    },
+  };
+  emit(stats, () => {
+    const s = stats;
+    console.log(`messages   ${s.messages.total} total, ${s.messages.queued} queued, median delivery ${fmtDur(s.messages.median_delivery)}`);
+    for (const [pair, n] of Object.entries(s.messages.by_pair)) console.log(`             ${pair}: ${n}`);
+    console.log(`tasks      ${s.tasks.open} open, ${s.tasks.in_progress} in progress, ${s.tasks.done} done, median open->done ${fmtDur(s.tasks.median_open_to_done)}`);
+    console.log(`handoffs   ${s.handoffs.total} total, ${s.handoffs.completed} completed, median handoff->done ${fmtDur(s.handoffs.median_handoff_to_done)}`);
+    console.log(`notes      ${Object.entries(s.notes.by_type).map(([t, n]) => `${n} ${t}`).join(', ') || 'none'}${s.notes.superseded ? `, ${s.notes.superseded} superseded` : ''}`);
+    console.log(`questions  ${s.questions.open} open, ${s.questions.resolved} resolved, median time-to-answer ${fmtDur(s.questions.median_time_to_answer)}${s.questions.oldest_open_age_ms ? `, oldest open ${fmtDur(s.questions.oldest_open_age_ms)}` : ''}`);
+  });
+}
+
+// -------------------------------------------------------------------- help
+
+function help() {
+  return `chatter — Slack + shared memory for agents in this Herdr session
+
+  chatter agents                        who's online, their branch and task
+  chatter send <agent> <message...>     message an agent (lands in their session)
+  chatter inbox [--all]                 your unread messages (--all = history)
+  chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
+  chatter notes [query] [--all]         read/search the shared scratchpad
+  chatter resolve <note-id>             mark a note stale/superseded
+  chatter ask [agent] <question...>     open a question (optionally aimed at an agent)
+  chatter answer <id> <text...>         answer a question (notifies the asker)
+  chatter questions [--all]             open questions; --all includes answered
+  chatter task create <title> [--assignee agent]
+  chatter task list | assign <TASK-n> <agent> | done <TASK-n> [--commit SHA]
+  chatter handoff <TASK-n> <agent> --summary S [--branch B] [--commit C]
+                  [--files a,b] [--tests CMD] [--next TEXT]
+  chatter handoff show <id>             structured handoff payload (JSON)
+  chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
+  chatter stats                         team metrics (delivery latency, tasks, questions)
+  chatter whoami
+
+Record dead-ends (--type dead-end) so teammates don't repeat failed
+investigations. Answer open questions before they go stale.
+
+Most read commands accept --json. Raw history: query the SQLite DB directly at
+${path.join(resolveStateDir(), 'chatter.db')}
+(tables: agents, messages, notes, tasks, handoffs).
+
+Code moves through Git (commit/branch refs in handoffs) — never edit another
+agent's worktree. Chatter carries context, Git carries code.`;
+}
+
+// ------------------------------------------------------------- plugin hooks
+
+function ensurePointerAndSymlink() {
+  // Startup hook runs with plugin env; persist what bare CLI calls can't see.
+  const stateDir = process.env.HERDR_PLUGIN_STATE_DIR;
+  const cfgDir = process.env.HERDR_PLUGIN_CONFIG_DIR;
+  if (stateDir && cfgDir) {
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.writeFileSync(path.join(cfgDir, 'state-dir'), stateDir + '\n');
+  }
+  // Make `chatter` callable from any agent shell.
+  const target = path.join(__dirname, '..', 'bin', 'chatter');
+  const link = path.join(os.homedir(), '.local', 'bin', 'chatter');
+  try {
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    // lstat (not stat/existsSync): a dangling symlink must still be replaced.
+    let current = null;
+    try { current = fs.readlinkSync(link); } catch { /* absent or not a symlink */ }
+    if (path.resolve(path.dirname(link), current || '') !== path.resolve(target)) {
+      fs.rmSync(link, { force: true });
+      fs.symlinkSync(path.resolve(target), link);
+    }
+  } catch (e) {
+    console.error(`symlink setup failed: ${e.message}`);
+  }
+}
+
+function hookStartup() {
+  ensurePointerAndSymlink();
+  const n = flushPending();
+  console.log(`chatter startup: ready${n ? `, flushed ${n} queued message(s)` : ''}`);
+}
+
+function hookFlush() {
+  // Runs on pane.agent_status_changed — must be cheap when idle.
+  const n = flushPending();
+  if (n) console.log(`flushed ${n}`);
+}
+
+function hookOpenBoard() {
+  const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'board']);
+  if (!r.ok) { console.error(r.raw); process.exit(1); }
+}
+
+module.exports = {
+  cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami,
+  cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
+  cmdTask, cmdHandoff, cmdStats,
+  taskLabel, openQuestions, help,
+  hookStartup, hookFlush, hookOpenBoard,
+};

@@ -119,6 +119,34 @@ command = "n8n.chatter.open-board"
 description = "chatter board"
 ```
 
+## Trust model
+
+Chatter's boundary is **your local user account**: everything runs as you, on
+your machine, against your Herdr session. Within that boundary:
+
+- Delivered messages are *deliberate prompt injection between cooperating
+  agents* — a message becomes input in the recipient's session. Only run
+  agents you'd trust to type into each other's terminals.
+- Injected text is sanitized (control/ANSI characters stripped so a message
+  can't visually forge the `[chatter]` framing) and capped at ~700 chars; the
+  full original always stays in the DB (`chatter inbox --all`).
+- Delivery never targets a `blocked` agent (its dialog would swallow the text)
+  and claims each message atomically, so concurrent flush hooks can't
+  double-deliver or hit a stale pane now owned by a different agent.
+- Identity is honor-system per pane: any process in a Herdr pane can speak as
+  that pane's agent. There is no cross-user or network exposure — no sockets
+  are opened, all SQL is parameterized, and every subprocess uses argv arrays
+  (no shell interpolation).
+
+## Code layout
+
+```
+bin/chatter      sh wrapper        bin/chatter.js   entry + dispatch
+src/util.js      flags, output, time   src/db.js    state dir, schema
+src/herdr.js     herdr CLI + roster cache   src/team.js  identity + delivery
+src/commands.js  all commands + hooks       src/board.js dashboard
+```
+
 ## Herdr surface used (verified on 0.8.0 / protocol 19)
 
 - `agent list / rename / prompt / wait / read` — discovery, naming, delivery
