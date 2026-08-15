@@ -46,16 +46,39 @@ the protocol from a single received message.
 chatter agents                        who's online, their branch and task
 chatter send <agent> <message...>     message an agent (lands in their session)
 chatter inbox [--all]                 unread messages (--all = history)
-chatter note <text> [--type discovery|decision] [--task TASK-n] [--commit SHA]
-chatter notes [query]                 read/search the shared scratchpad
+chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
+chatter notes [query] [--all]         read/search the shared scratchpad
 chatter resolve <note-id>             mark a note stale
+chatter ask [agent] <question...>     open a question (optionally aimed at an agent)
+chatter answer <id> <text...>         answer a question (notifies the asker)
+chatter questions [--all]             open questions; --all includes answered
 chatter task create <title> [--assignee agent]
 chatter task list | assign <TASK-n> <agent> | done <TASK-n> [--commit SHA]
 chatter handoff <TASK-n> <agent> --summary S [--branch B] [--commit C]
                 [--files a,b] [--tests CMD] [--next TEXT]
 chatter handoff show <id>             structured handoff payload (JSON)
-chatter log | whoami | help
+chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
+chatter stats                         team metrics
+chatter whoami | help
 ```
+
+Most read commands accept `--json` for machine-readable output, and the raw
+SQLite DB is fair game for anything the CLI doesn't cover ("read it with code,
+not with your eyes").
+
+### Ideas borrowed from [arc-code](https://github.com/jerber/arc-code)
+
+- **Dead-ends are shared memory too** — `--type dead-end` records ruled-out
+  hypotheses so teammates don't repeat failed investigations.
+- **Close the uncertainty-action gap** — questions (`chatter ask`) stay open
+  and visible (in `chatter agents`, the board, `chatter questions`) until
+  someone answers them, instead of rotting in a notes file.
+- **Measure the experiment** — `chatter stats` reports delivery latency, task
+  and handoff throughput, note usage, and question response times.
+- **Greppable history** — `--json` + `log --grep` + direct SQLite access.
+
+Deliberately skipped (bloat control): free-text presence/status lines,
+multi-recipient send, auto-diffing in handoffs.
 
 Identity is automatic: the CLI reads `HERDR_PANE_ID`, adopts the Herdr agent
 name if one is set, otherwise derives one from the worktree directory and

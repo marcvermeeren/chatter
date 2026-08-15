@@ -207,12 +207,13 @@ function cmdInbox(me, args) {
   const rows = all
     ? db().prepare('SELECT * FROM messages WHERE to_agent = ? OR from_agent = ? ORDER BY id DESC LIMIT 50').all(me.name, me.name)
     : db().prepare('SELECT * FROM messages WHERE to_agent = ? AND read_at IS NULL ORDER BY id').all(me.name);
-  if (!rows.length) { console.log(all ? 'no messages' : 'no unread messages'); return; }
-  for (const m of (all ? rows.reverse() : rows)) {
+  if (JSON_OUT) console.log(JSON.stringify(all ? [...rows].reverse() : rows, null, 2));
+  else if (!rows.length) { console.log(all ? 'no messages' : 'no unread messages'); return; }
+  else for (const m of (all ? [...rows].reverse() : rows)) {
     const tag = m.kind === 'chat' ? '' : ` [${m.kind}${m.ref_id ? ' ' + m.ref_id : ''}]`;
     console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}${tag}: ${m.body}`);
   }
-  if (!all) {
+  if (!all && rows.length) {
     const ids = rows.map((m) => m.id);
     db().prepare(`UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id IN (${ids.join(',')})`).run(now(), now());
   }
@@ -241,28 +242,115 @@ function cmdAgents(me) {
     if (l.name && !seen.has(l.name)) lines.push(`  ${l.name.padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (not yet on chatter)`);
     if (!l.name) lines.push(`  ${('pane:' + l.pane_id).padEnd(20)} ${l.agent_status.padEnd(9)} ${'-'.padEnd(24)} (unnamed ${l.agent || 'agent'})`);
   }
+  const open = openQuestions();
+  if (JSON_OUT) {
+    emit(registered.map((a) => {
+      const l = live.find((x) => x.name === a.name || x.pane_id === a.pane_id);
+      return { ...a, status: l ? l.agent_status : 'offline', task: taskBy[a.name] || null };
+    }), () => {});
+    return;
+  }
   console.log(lines.length ? `  ${'NAME'.padEnd(20)} ${'STATUS'.padEnd(9)} ${'BRANCH'.padEnd(24)} TASK\n` + lines.join('\n') : 'no agents');
+  if (open.length) console.log(`\n${open.length} open question${open.length > 1 ? 's' : ''} (${open.map((q) => '#' + q.id).join(' ')}) — chatter questions`);
 }
+
+const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
 
 function cmdNote(me, args) {
   const opts = parseFlags(args, { type: 'note', task: null, commit: null });
   const text = opts._.join(' ').trim();
-  if (!text) die('usage: chatter note <text> [--type discovery|decision] [--task TASK-n] [--commit SHA]');
+  if (!text) die('usage: chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]');
+  if (!NOTE_TYPES.includes(opts.type)) console.error(`warning: unusual note type "${opts.type}" (known: ${NOTE_TYPES.join(', ')})`);
   const r = db().prepare('INSERT INTO notes (author, type, text, task_id, commit_sha, created_at) VALUES (?,?,?,?,?,?)')
     .run(me.name, opts.type, text, opts.task, opts.commit, now());
   console.log(`note #${r.lastInsertRowid} saved`);
 }
 
 function cmdNotes(_me, args) {
-  const q = args.join(' ').trim();
+  const opts = parseFlags(args, { all: false });
+  const q = opts._.join(' ').trim();
+  const where = opts.all ? '1=1' : "status = 'active'";
   const rows = q
-    ? db().prepare("SELECT * FROM notes WHERE status = 'active' AND text LIKE ? ORDER BY id DESC LIMIT 30").all(`%${q}%`)
-    : db().prepare("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 30").all();
-  if (!rows.length) { console.log(q ? `no active notes matching "${q}"` : 'no notes yet'); return; }
-  for (const n of rows.reverse()) {
-    const refs = [n.task_id, n.commit_sha && n.commit_sha.slice(0, 8)].filter(Boolean).join(' ');
-    console.log(`#${n.id} [${n.type}] ${n.author}: ${n.text}${refs ? `  (${refs})` : ''}`);
+    ? db().prepare(`SELECT * FROM notes WHERE ${where} AND text LIKE ? ORDER BY id DESC LIMIT 100`).all(`%${q}%`)
+    : db().prepare(`SELECT * FROM notes WHERE ${where} ORDER BY id DESC LIMIT 100`).all();
+  emit(rows, () => {
+    if (!rows.length) { console.log(q ? `no notes matching "${q}"` : 'no notes yet'); return; }
+    for (const n of rows.reverse()) {
+      const refs = [n.task_id, n.commit_sha && n.commit_sha.slice(0, 8)].filter(Boolean).join(' ');
+      const st = n.status === 'active' ? '' : ` (${n.status}${n.superseded_by ? ` by #${n.superseded_by}` : ''})`;
+      console.log(`#${n.id} [${n.type}] ${n.author}: ${n.text}${refs ? `  (${refs})` : ''}${st}`);
+    }
+  });
+}
+
+function knownAgentNames() {
+  const names = new Set(db().prepare('SELECT name FROM agents').all().map((r) => r.name));
+  for (const a of liveAgents()) if (a.name) names.add(a.name);
+  return names;
+}
+
+function cmdAsk(me, args) {
+  if (!args.length) die('usage: chatter ask [agent] <question...>');
+  let target = null, words = args;
+  if (args.length > 1 && knownAgentNames().has(args[0])) { target = args[0]; words = args.slice(1); }
+  const text = words.join(' ').trim();
+  if (!text) die('usage: chatter ask [agent] <question...>');
+  const r = db().prepare('INSERT INTO notes (author, type, text, created_at) VALUES (?,?,?,?)')
+    .run(me.name, 'question', text, now());
+  const id = r.lastInsertRowid;
+  let note = `question #${id} opened`;
+  if (target) {
+    const res = sendMessage(me.name, target, `question #${id}: ${text} (answer with: chatter answer ${id} "...")`, 'system', `q${id}`);
+    note += res.delivered ? `, delivered to ${target}` : `, queued for ${target} (${res.reason})`;
+  } else {
+    note += ' (open to anyone — visible in chatter questions)';
   }
+  console.log(note);
+}
+
+function cmdAnswer(me, args) {
+  const id = parseInt(args[0], 10);
+  const text = args.slice(1).join(' ').trim();
+  if (!id || !text) die('usage: chatter answer <question-id> <text...>');
+  const q = db().prepare("SELECT * FROM notes WHERE id = ? AND type = 'question'").get(id);
+  if (!q) die(`question #${id} not found`);
+  if (q.status !== 'active') die(`question #${id} is already ${q.status}`);
+  const reply = db().prepare('INSERT INTO notes (author, type, text, created_at) VALUES (?,?,?,?)')
+    .run(me.name, 'note', `answer to #${id}: ${text}`, now());
+  db().prepare("UPDATE notes SET status = 'resolved', superseded_by = ? WHERE id = ?").run(reply.lastInsertRowid, id);
+  let out = `question #${id} answered (note #${reply.lastInsertRowid})`;
+  if (q.author !== me.name) {
+    const res = sendMessage(me.name, q.author, `answer to your question #${id} ("${q.text}"): ${text}`, 'system', `q${id}`);
+    out += res.delivered ? `, delivered to ${q.author}` : `, queued for ${q.author}`;
+  }
+  console.log(out);
+}
+
+function openQuestions() {
+  return db().prepare("SELECT * FROM notes WHERE type = 'question' AND status = 'active' ORDER BY id").all();
+}
+
+function cmdQuestions(_me, args) {
+  const opts = parseFlags(args, { all: false });
+  if (opts.all) {
+    const rows = db().prepare("SELECT * FROM notes WHERE type = 'question' ORDER BY id").all();
+    const answers = Object.fromEntries(
+      rows.filter((r) => r.superseded_by)
+        .map((r) => [r.id, db().prepare('SELECT * FROM notes WHERE id = ?').get(r.superseded_by)]));
+    emit(rows.map((r) => ({ ...r, answer: answers[r.id] || null })), () => {
+      if (!rows.length) { console.log('no questions'); return; }
+      for (const r of rows) {
+        console.log(`#${r.id} [${r.status}] ${r.author}: ${r.text}`);
+        if (answers[r.id]) console.log(`    -> ${answers[r.id].author}: ${answers[r.id].text.replace(/^answer to #\d+: /, '')}`);
+      }
+    });
+    return;
+  }
+  const rows = openQuestions();
+  emit(rows, () => {
+    if (!rows.length) { console.log('no open questions'); return; }
+    for (const r of rows) console.log(`#${r.id} (${age(r.created_at)} old) ${r.author}: ${r.text}  (answer: chatter answer ${r.id} "...")`);
+  });
 }
 
 function cmdResolve(_me, args) {
@@ -297,8 +385,10 @@ function cmdTask(me, args) {
     notifyAssignment(me, { id, title, assignee: opts.assignee });
   } else if (sub === 'list') {
     const rows = db().prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id").all();
-    if (!rows.length) { console.log('no tasks'); return; }
-    for (const t of rows) console.log(taskLabel(t));
+    emit(rows, () => {
+      if (!rows.length) { console.log('no tasks'); return; }
+      for (const t of rows) console.log(taskLabel(t));
+    });
   } else if (sub === 'assign') {
     const [id, agent] = [args[1], args[2]];
     if (!id || !agent) die('usage: chatter task assign <TASK-n> <agent>');
@@ -366,13 +456,88 @@ function cmdWhoami(me) {
   console.log(`${me.name}${me.paneId ? ` (pane ${me.paneId})` : ' (not inside a Herdr pane)'}`);
 }
 
-function cmdLog() {
-  const rows = db().prepare('SELECT * FROM messages ORDER BY id DESC LIMIT 40').all();
-  for (const m of rows.reverse()) {
-    const st = m.read_at ? '' : m.delivered_at ? ' (unread)' : ' (queued)';
-    console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}: ${m.body}${st}`);
+function cmdLog(_me, args) {
+  const opts = parseFlags(args, { grep: null, task: null, limit: null, all: false });
+  const cond = ['1=1'], params = [];
+  if (opts.task) { cond.push('ref_id = ?'); params.push(opts.task); }
+  const limit = opts.all ? '' : ` LIMIT ${parseInt(opts.limit, 10) || 40}`;
+  let rows = db().prepare(`SELECT * FROM messages WHERE ${cond.join(' AND ')} ORDER BY id DESC${limit}`).all(...params);
+  if (opts.grep) {
+    let re; try { re = new RegExp(opts.grep, 'i'); } catch { re = null; }
+    rows = rows.filter((m) => re
+      ? re.test(m.body) || re.test(m.from_agent) || re.test(m.to_agent)
+      : (m.body + m.from_agent + m.to_agent).toLowerCase().includes(opts.grep.toLowerCase()));
   }
-  if (!rows.length) console.log('no messages');
+  emit(rows, () => {
+    for (const m of rows.reverse()) {
+      const st = m.read_at ? '' : m.delivered_at ? ' (unread)' : ' (queued)';
+      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}: ${m.body}${st}`);
+    }
+    if (!rows.length) console.log('no messages match');
+  });
+}
+
+function cmdStats() {
+  const d = db();
+  const msgs = d.prepare('SELECT * FROM messages').all();
+  const tasks = d.prepare('SELECT * FROM tasks').all();
+  const handoffs = d.prepare('SELECT * FROM handoffs').all();
+  const notes = d.prepare('SELECT * FROM notes').all();
+  const pairs = {};
+  for (const m of msgs) pairs[`${m.from_agent} -> ${m.to_agent}`] = (pairs[`${m.from_agent} -> ${m.to_agent}`] || 0) + 1;
+  const latencies = msgs.filter((m) => m.delivered_at).map((m) => toMs(m.delivered_at) - toMs(m.created_at));
+  const doneDur = tasks.filter((t) => t.status === 'done').map((t) => toMs(t.updated_at) - toMs(t.created_at));
+  const handoffDone = handoffs.filter((h) => h.status === 'done').map((h) => {
+    const t = tasks.find((x) => x.id === h.task_id);
+    return t ? toMs(t.updated_at) - toMs(h.created_at) : null;
+  }).filter((x) => x != null);
+  const byType = {};
+  for (const n of notes) byType[n.type] = (byType[n.type] || 0) + 1;
+  const qs = notes.filter((n) => n.type === 'question');
+  const qAnswered = qs.filter((q) => q.status === 'resolved' && q.superseded_by);
+  const qLat = qAnswered.map((q) => {
+    const a = notes.find((n) => n.id === q.superseded_by);
+    return a ? toMs(a.created_at) - toMs(q.created_at) : null;
+  }).filter((x) => x != null);
+  const openQs = qs.filter((q) => q.status === 'active');
+  const stats = {
+    messages: {
+      total: msgs.length,
+      queued: msgs.filter((m) => !m.delivered_at).length,
+      median_delivery: median(latencies),
+      by_pair: pairs,
+    },
+    tasks: {
+      open: tasks.filter((t) => t.status === 'open').length,
+      in_progress: tasks.filter((t) => t.status === 'in_progress').length,
+      done: tasks.filter((t) => t.status === 'done').length,
+      median_open_to_done: median(doneDur),
+    },
+    handoffs: {
+      total: handoffs.length,
+      completed: handoffs.filter((h) => h.status === 'done').length,
+      median_handoff_to_done: median(handoffDone),
+    },
+    notes: {
+      by_type: byType,
+      superseded: notes.filter((n) => n.status !== 'active' && n.type !== 'question').length,
+    },
+    questions: {
+      open: openQs.length,
+      resolved: qAnswered.length,
+      median_time_to_answer: median(qLat),
+      oldest_open_age_ms: openQs.length ? Date.now() - toMs(openQs[0].created_at) : null,
+    },
+  };
+  emit(stats, () => {
+    const s = stats;
+    console.log(`messages   ${s.messages.total} total, ${s.messages.queued} queued, median delivery ${fmtDur(s.messages.median_delivery)}`);
+    for (const [pair, n] of Object.entries(s.messages.by_pair)) console.log(`             ${pair}: ${n}`);
+    console.log(`tasks      ${s.tasks.open} open, ${s.tasks.in_progress} in progress, ${s.tasks.done} done, median open->done ${fmtDur(s.tasks.median_open_to_done)}`);
+    console.log(`handoffs   ${s.handoffs.total} total, ${s.handoffs.completed} completed, median handoff->done ${fmtDur(s.handoffs.median_handoff_to_done)}`);
+    console.log(`notes      ${Object.entries(s.notes.by_type).map(([t, n]) => `${n} ${t}`).join(', ') || 'none'}${s.notes.superseded ? `, ${s.notes.superseded} superseded` : ''}`);
+    console.log(`questions  ${s.questions.open} open, ${s.questions.resolved} resolved, median time-to-answer ${fmtDur(s.questions.median_time_to_answer)}${s.questions.oldest_open_age_ms ? `, oldest open ${fmtDur(s.questions.oldest_open_age_ms)}` : ''}`);
+  });
 }
 
 const HELP = `chatter — Slack + shared memory for agents in this Herdr session
@@ -380,16 +545,27 @@ const HELP = `chatter — Slack + shared memory for agents in this Herdr session
   chatter agents                        who's online, their branch and task
   chatter send <agent> <message...>     message an agent (lands in their session)
   chatter inbox [--all]                 your unread messages (--all = history)
-  chatter note <text> [--type discovery|decision] [--task TASK-n] [--commit SHA]
-  chatter notes [query]                 read/search the shared scratchpad
+  chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
+  chatter notes [query] [--all]         read/search the shared scratchpad
   chatter resolve <note-id>             mark a note stale/superseded
+  chatter ask [agent] <question...>     open a question (optionally aimed at an agent)
+  chatter answer <id> <text...>         answer a question (notifies the asker)
+  chatter questions [--all]             open questions; --all includes answered
   chatter task create <title> [--assignee agent]
   chatter task list | assign <TASK-n> <agent> | done <TASK-n> [--commit SHA]
   chatter handoff <TASK-n> <agent> --summary S [--branch B] [--commit C]
                   [--files a,b] [--tests CMD] [--next TEXT]
   chatter handoff show <id>             structured handoff payload (JSON)
-  chatter log                           recent team messages
+  chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
+  chatter stats                         team metrics (delivery latency, tasks, questions)
   chatter whoami
+
+Record dead-ends (--type dead-end) so teammates don't repeat failed
+investigations. Answer open questions before they go stale.
+
+Most read commands accept --json. Raw history: query the SQLite DB directly at
+~/.local/state/herdr/plugins/n8n.chatter/chatter.db (tables: agents, messages,
+notes, tasks, handoffs).
 
 Code moves through Git (commit/branch refs in handoffs) — never edit another
 agent's worktree. Chatter carries context, Git carries code.`;
@@ -446,8 +622,9 @@ function renderBoard() {
   const msgs = db().prepare('SELECT * FROM messages ORDER BY id DESC LIMIT 8').all();
   const taskBy = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress').map((t) => [t.assignee, t]));
   const dot = { idle: '\x1b[32m●\x1b[0m', done: '\x1b[32m●\x1b[0m', working: '\x1b[33m●\x1b[0m', blocked: '\x1b[31m●\x1b[0m', unknown: '\x1b[90m●\x1b[0m', offline: '\x1b[90m○\x1b[0m' };
+  const openQ = openQuestions();
   const out = [];
-  out.push('\x1b[1m Chatter\x1b[0m  (q to close)\n');
+  out.push(`\x1b[1m Chatter\x1b[0m  (q to close)${openQ.length ? `   \x1b[33m${openQ.length} open question${openQ.length > 1 ? 's' : ''}\x1b[0m` : ''}\n`);
   out.push('\x1b[1m Agents\x1b[0m');
   if (!agents.length) out.push('   (none registered yet)');
   for (const a of agents) {
@@ -490,18 +667,46 @@ function parseFlags(args, defs) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       if (!(key in defs)) die(`unknown flag ${a}`);
-      out[key] = args[++i];
+      // defs with a boolean default are switches; others consume a value.
+      if (typeof defs[key] === 'boolean') out[key] = true;
+      else out[key] = args[++i];
     } else out._.push(a);
   }
   return out;
 }
+
+let JSON_OUT = false;
+function emit(data, textFn) {
+  if (JSON_OUT) console.log(JSON.stringify(data, null, 2));
+  else textFn();
+}
+
+const toMs = (s) => new Date(s.replace(' ', 'T') + 'Z').getTime();
+function median(nums) {
+  if (!nums.length) return null;
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+function fmtDur(ms) {
+  if (ms == null) return '-';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+const age = (ts) => fmtDur(Date.now() - toMs(ts));
 
 function die(msg) { console.error(msg); process.exit(1); }
 
 // --------------------------------------------------------------------- main
 
 function main() {
-  const [cmd, ...args] = process.argv.slice(2);
+  const argv = process.argv.slice(2).filter((a) => {
+    if (a === '--json') { JSON_OUT = true; return false; }
+    return true;
+  });
+  const [cmd, ...args] = argv;
   // Internal plugin entrypoints (run with plugin env, not by agents).
   if (cmd === '_startup') return hookStartup();
   if (cmd === '_flush') return hookFlush();
@@ -518,10 +723,14 @@ function main() {
     case 'note': cmdNote(me, args); break;
     case 'notes': case 'search': cmdNotes(me, args); break;
     case 'resolve': cmdResolve(me, args); break;
+    case 'ask': cmdAsk(me, args); break;
+    case 'answer': cmdAnswer(me, args); break;
+    case 'questions': cmdQuestions(me, args); break;
     case 'task': cmdTask(me, args); break;
     case 'handoff': cmdHandoff(me, args); break;
     case 'whoami': cmdWhoami(me); break;
-    case 'log': cmdLog(); break;
+    case 'log': cmdLog(me, args); break;
+    case 'stats': cmdStats(); break;
     default: die(`unknown command "${cmd}" — try: chatter help`);
   }
   // Piggyback: any chatter activity flushes queued mail for everyone.
