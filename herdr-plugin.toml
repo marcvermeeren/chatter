@@ -1,0 +1,27 @@
+id = "n8n.chatter"
+name = "Chatter"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Slack for agents: cross-worktree messages, shared notes, tasks, and handoffs"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["node", "--no-warnings", "bin/chatter.js", "_startup"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "--no-warnings", "bin/chatter.js", "_flush"]
+
+[[actions]]
+id = "open-board"
+title = "Open Chatter board"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "--no-warnings", "bin/chatter.js", "_open_board"]
+
+[[panes]]
+id = "board"
+title = "Chatter board"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["node", "--no-warnings", "bin/chatter.js", "board"]
