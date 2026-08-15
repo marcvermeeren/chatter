@@ -6,7 +6,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { PLUGIN_ID, herdr, liveAgents, matchLive } = require('./herdr');
 const { db, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles } = require('./db');
-const { whoami, sendMessage, flushPending, resolveRecipient, chatUnreadCount } = require('./team');
+const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount } = require('./team');
+const { configRoot, humanName } = require('./db');
 const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
 
 const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
@@ -25,40 +26,12 @@ function cmdSend(me, args) {
 
 // ---------------------------------------------------------------- group chat
 
-const MENTION_RE = /@([a-z0-9_-]+)/g;
-
 function cmdPost(me, args) {
   const body = args.join(' ').trim();
   if (!body) die('usage: chatter post <text...>   (mention with @name; @everyone is human-only)');
-  const postId = db().prepare(
-    "INSERT INTO messages (from_agent, to_agent, body, kind, created_at, delivered_at) VALUES (?,'#chat',?,'post',?,?)"
-  ).run(me.name, body, now(), now()).lastInsertRowid;
-  const mentioned = new Set();
-  let everyone = false;
-  for (const m of body.matchAll(MENTION_RE)) {
-    if (m[1] === 'everyone') { everyone = true; continue; }
-    const hit = resolveRecipient(m[1], { soft: true });
-    if (hit && hit !== me.name) mentioned.add(hit);
-    else if (!hit) console.error(`warning: mention @${m[1]} matches no agent in this repo — not pushed`);
-  }
-  if (everyone) {
-    if (me.human) {
-      // Every live agent resolvable in this repo (registered or not).
-      for (const a of liveAgents()) {
-        if (!a.name || a.name === me.name) continue;
-        const hit = resolveRecipient(a.name, { soft: true });
-        if (hit) mentioned.add(hit);
-      }
-    } else {
-      console.error('warning: @everyone is reserved for the human — post saved, nobody was pushed');
-    }
-  }
-  const results = [];
-  for (const to of mentioned) {
-    const res = sendMessage(me.name, to, body, 'mention', `p${postId}`);
-    results.push(`${to}${res.delivered ? '' : ' (queued)'}`);
-  }
-  console.log(`posted to #chat (#${postId})${results.length ? `, pushed to ${results.join(', ')}` : ''}`);
+  const { postId, pushed, warnings } = postToChat(me, body);
+  for (const w of warnings) console.error(`warning: ${w}`);
+  console.log(`posted to #chat (#${postId})${pushed.length ? `, pushed to ${pushed.join(', ')}` : ''}`);
 }
 
 function cmdChat(me, args) {
@@ -149,7 +122,21 @@ function cmdAgents(me) {
 }
 
 function cmdWhoami(me) {
-  console.log(`${me.name}${me.paneId ? ` (pane ${me.paneId})` : ' (not inside a Herdr pane)'}`);
+  const where = me.paneId ? `pane ${me.paneId}` : 'not inside a Herdr pane';
+  console.log(`${me.name}${me.human ? ' (human' : ' ('}${me.human ? ', ' + where : where})`);
+}
+
+// Set the human's chat name (stored in the plugin config dir, global).
+function cmdIam(_me, args) {
+  const fsx = require('node:fs');
+  if (!args[0]) { console.log(`you are "${humanName()}" — change with: chatter iam <name>`); return; }
+  const name = args[0].toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32);
+  if (!name) die('usage: chatter iam <name>');
+  const clash = liveAgents().some((a) => a.name === name);
+  if (clash) die(`"${name}" is a live agent's name — pick another`);
+  fsx.mkdirSync(configRoot(), { recursive: true });
+  fsx.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
+  console.log(`you are now "${name}" — agents can reach you with: chatter send ${name} "..." or @${name} in #chat`);
 }
 
 // ------------------------------------------------------------------- notes
@@ -449,6 +436,10 @@ function help() {
   chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
   chatter stats                         team metrics (delivery latency, tasks, questions)
   chatter whoami
+  chatter iam <name>                    set the human's chat name (human only)
+
+The human is "${humanName()}": DMs and @${humanName()} mentions reach them as a
+Herdr toast notification, and they read/post like anyone else.
 
 Chatter is scoped per repository: agents, chat, notes, and tasks are only
 shared within this repo (all its worktrees). Record dead-ends (--type
@@ -509,15 +500,17 @@ function hookFlush() {
   if (n) console.log(`flushed ${n}`);
 }
 
-function hookOpenBoard() {
-  const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'board']);
+function openPane(entrypoint) {
+  const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', entrypoint]);
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
+const hookOpenBoard = () => openPane('board');
+const hookOpenChat = () => openPane('chat');
 
 module.exports = {
-  cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdPost, cmdChat,
+  cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats,
   taskLabel, openQuestions, help,
-  hookStartup, hookFlush, hookOpenBoard,
+  hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

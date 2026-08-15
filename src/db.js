@@ -29,6 +29,21 @@ function gitInfo(cwd = process.cwd()) {
   return (_git = { cwd, branch: branch || null, toplevel: toplevel || null, repoRoot });
 }
 
+// User-editable plugin config (e.g. the human's chat name).
+function configRoot() {
+  return process.env.HERDR_PLUGIN_CONFIG_DIR
+    || path.join(os.homedir(), '.config', 'herdr', 'plugins', 'config', PLUGIN_ID);
+}
+
+// The human's name in chatter (set with `chatter iam <name>`).
+function humanName() {
+  try {
+    const n = fs.readFileSync(path.join(configRoot(), 'name'), 'utf8').trim();
+    if (n) return n;
+  } catch { /* not set */ }
+  return 'user';
+}
+
 function stateRoot() {
   if (process.env.HERDR_PLUGIN_STATE_DIR) return process.env.HERDR_PLUGIN_STATE_DIR;
   // Herdr's layout on Unix (verified 0.8.0): ~/.local/state/herdr/plugins/<id>
@@ -119,4 +134,4 @@ function db() {
 
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-module.exports = { gitInfo, stateRoot, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, now };
+module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, now };

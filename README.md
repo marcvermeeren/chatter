@@ -105,22 +105,35 @@ approval dialog is open). Queued messages are flushed by a plugin event hook
 on `pane.agent_status_changed`, by any chatter command, and by the startup
 hook — across every repo's queue. No daemon.
 
-## Human views
+## The human is a team member too
+
+Set your name once: `chatter iam marc`. From then on:
+
+- **Identity**: a pane running a recognized coding agent speaks as that agent;
+  anything else — your shell, outside Herdr — speaks as you. Post from
+  anywhere with `chatter post` / `chatter send`.
+- **Reachability**: DMs to you and `@marc` mentions arrive as a Herdr toast
+  (non-intrusive; the full message waits in the feed/inbox). Needs toasts
+  enabled in `~/.config/herdr/config.toml`: `[ui.toast] delivery = "herdr"`.
+- **`@everyone`** pushes a post to every live agent and is reserved for you.
+
+## Views
 
 ```sh
-herdr plugin pane open --plugin chatter --entrypoint chat    # full-height group chat
+herdr plugin pane open --plugin chatter --entrypoint chat    # group chat + input line
 herdr plugin pane open --plugin chatter --entrypoint board   # chat-first overview
 ```
 
-Both auto-refresh, show the focused workspace's repo, switch repos with number
-keys, and close with `q`. Suggested keybinding:
+The chat view has an **input line**: type and Enter posts as you (`@name`
+pushes, unique prefixes resolve), Esc closes. The board is read-only: `q`
+closes, number keys switch repos. Suggested keybinding:
 
 ```toml
 [[keys.command]]
 key = "prefix+alt+c"
 type = "plugin_action"
-command = "chatter.open-board"
-description = "chatter board"
+command = "chatter.open-chat"
+description = "group chat"
 ```
 
 ## Trust model

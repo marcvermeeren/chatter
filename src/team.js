@@ -5,7 +5,7 @@
 
 const path = require('node:path');
 const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
-const { db, now, gitInfo } = require('./db');
+const { db, now, gitInfo, humanName } = require('./db');
 const { die } = require('./util');
 
 // ---------------------------------------------------------------- identity
@@ -15,13 +15,17 @@ function sanitizeName(s) {
   return n || 'agent';
 }
 
-// Identify the calling pane's agent; auto-register on first contact.
-// Naming ladder: manual pane label > <worktree-dir>-<kind> > cwd basename.
+// Identify the caller. A pane running a recognized coding agent speaks as
+// that agent; anything else (the human's shell, scripts, outside Herdr) is
+// the human, named via `chatter iam <name>`.
+// Agent naming ladder: manual pane label > <worktree-dir>-<kind> > cwd basename.
 function whoami() {
-  const paneId = process.env.HERDR_PANE_ID;
-  if (!paneId) return { name: 'user', paneId: null, human: true };
+  const paneId = process.env.HERDR_PANE_ID || null;
+  const human = { name: humanName(), paneId, human: true };
+  if (!paneId) return human;
   const live = liveAgents();
   const me = live.find((a) => a.pane_id === paneId);
+  if (!me) return human;
   const label = paneLabel(paneId);
   let name = me && me.name;
   if (!name) {
@@ -71,7 +75,7 @@ function rosterNames() {
 // verifiably in this repo). Exact > unique prefix > refuse-with-suggestions.
 // { allowUnknown: true } queues for a not-yet-existing exact name (--queue).
 function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
-  const candidates = new Set(rosterNames());
+  const candidates = new Set([...rosterNames(), humanName()]);
   if (candidates.has(input)) return input; // hot path: registered exact match
   // Live named agents not yet registered join the candidate pool only if
   // their pane's cwd belongs to this repo (keeps per-repo isolation).
@@ -137,9 +141,20 @@ function formatDelivery(msg, d = db()) {
   return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — reply: chatter send ${msg.from_agent} "..." | inbox: chatter inbox${chat} | all commands: chatter help)`;
 }
 
-// Inject one message into its target's live session. Claims the message
-// atomically first so concurrent flushes (event hooks) can't double-deliver.
+// Deliver one message: agents get a session injection; the human gets a toast
+// (the message itself waits in the feed/inbox). Claims the row atomically
+// first so concurrent flushes (event hooks) can't double-deliver.
 function tryDeliver(msg, live, d = db()) {
+  if (msg.to_agent === humanName()) {
+    const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
+      .run(now(), msg.id);
+    if (claim.changes !== 1) return false;
+    // Best effort: mark delivered even if toasts are configured off, so the
+    // flush loop doesn't re-toast forever. read_at stays null until viewed.
+    herdr(['notification', 'show', `chatter: ${msg.from_agent}`,
+      '--body', deliveryText(msg.body).slice(0, 200), '--sound', 'request']);
+    return true;
+  }
   const t = resolveTarget(msg.to_agent, live, d);
   if (!t || !DELIVERABLE.has(t.status)) return false;
   const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
@@ -163,19 +178,56 @@ function flushPending(d = db()) {
   return n;
 }
 
-function sendMessage(from, to, body, kind = 'chat', refId = null) {
-  const r = db().prepare(
+function sendMessage(from, to, body, kind = 'chat', refId = null, d = db()) {
+  const r = d.prepare(
     'INSERT INTO messages (from_agent, to_agent, body, kind, ref_id, created_at) VALUES (?,?,?,?,?,?)'
   ).run(from, to, body, kind, refId, now());
   const msg = { id: r.lastInsertRowid, from_agent: from, to_agent: to, body, kind, ref_id: refId };
   const live = liveAgents();
-  const t = resolveTarget(to, live);
+  if (to === humanName()) {
+    return tryDeliver(msg, live, d) ? { delivered: true } : { delivered: false, reason: 'toast failed — waiting in the feed' };
+  }
+  const t = resolveTarget(to, live, d);
   if (!t) return { delivered: false, reason: `"${to}" has no live pane — queued (they'll get it via chatter inbox or when they appear)` };
-  if (tryDeliver(msg, live)) return { delivered: true };
+  if (tryDeliver(msg, live, d)) return { delivered: true };
   return { delivered: false, reason: `${to} is ${t.status} — queued, will deliver when they settle` };
+}
+
+// Post to a repo's group chat and push any mentions. `resolveMention` maps a
+// raw @name to a recipient (or null); callers choose how strict that is.
+function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient(n, { soft: true })) {
+  const postId = d.prepare(
+    "INSERT INTO messages (from_agent, to_agent, body, kind, created_at, delivered_at) VALUES (?,'#chat',?,'post',?,?)"
+  ).run(me.name, body, now(), now()).lastInsertRowid;
+  const mentioned = new Set();
+  const warnings = [];
+  let everyone = false;
+  for (const m of body.matchAll(/@([a-z0-9_-]+)/g)) {
+    if (m[1] === 'everyone') { everyone = true; continue; }
+    const hit = resolveMention(m[1]);
+    if (hit && hit !== me.name) mentioned.add(hit);
+    else if (!hit) warnings.push(`mention @${m[1]} matches no agent in this repo — not pushed`);
+  }
+  if (everyone) {
+    if (me.human) {
+      for (const a of liveAgents()) {
+        if (!a.name || a.name === me.name) continue;
+        const hit = resolveMention(a.name);
+        if (hit) mentioned.add(hit);
+      }
+    } else {
+      warnings.push('@everyone is reserved for the human — post saved, nobody was pushed');
+    }
+  }
+  const pushed = [];
+  for (const to of mentioned) {
+    const res = sendMessage(me.name, to, body, 'mention', `p${postId}`, d);
+    pushed.push(`${to}${res.delivered ? '' : ' (queued)'}`);
+  }
+  return { postId, pushed, warnings };
 }
 
 module.exports = {
   sanitizeName, whoami, resolveRecipient, resolveTarget,
-  formatDelivery, tryDeliver, flushPending, sendMessage, chatUnreadCount,
+  formatDelivery, tryDeliver, flushPending, sendMessage, postToChat, chatUnreadCount,
 };

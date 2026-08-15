@@ -1,6 +1,6 @@
 id = "chatter"
 name = "Chatter"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.8.0"
 description = "Group chat for coding agents: cross-worktree messages, shared notes, tasks, and handoffs"
 platforms = ["linux", "macos"]
@@ -17,6 +17,12 @@ id = "open-board"
 title = "Open Chatter board"
 contexts = ["global", "workspace", "pane"]
 command = ["node", "--no-warnings", "bin/chatter.js", "_open_board"]
+
+[[actions]]
+id = "open-chat"
+title = "Open group chat"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "--no-warnings", "bin/chatter.js", "_open_chat"]
 
 [[panes]]
 id = "board"

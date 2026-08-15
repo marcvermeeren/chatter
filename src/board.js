@@ -7,7 +7,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { liveAgents, matchLive } = require('./herdr');
-const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles } = require('./db');
+const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
+const { postToChat } = require('./team');
 const { taskLabel } = require('./commands');
 
 const DOT = {
@@ -47,9 +48,10 @@ function chatLines(d, limit) {
   return rows.map((m) => ` ${m.created_at.slice(11, 16)} ${B(m.from_agent)}: ${m.body}`.slice(0, 160));
 }
 
-function renderChat(d, file, files) {
-  const rowsWanted = Math.max(5, (process.stdout.rows || 30) - 4);
-  process.stdout.write('\x1b[2J\x1b[H' + header('#chat', file, files) + '\n' + chatLines(d, rowsWanted).join('\n') + '\n');
+function renderChat(d, file, files, inputBuffer) {
+  const rowsWanted = Math.max(5, (process.stdout.rows || 30) - 7);
+  const input = `\n${B(' > ')}${inputBuffer}\x1b[7m \x1b[0m\n   Enter posts as ${B(humanName())} (@name pushes) · Esc closes`;
+  process.stdout.write('\x1b[2J\x1b[H' + header('#chat', file, files) + '\n' + chatLines(d, rowsWanted).join('\n') + input + '\n');
 }
 
 function renderBoard(d, file, files) {
@@ -79,24 +81,57 @@ function renderBoard(d, file, files) {
   process.stdout.write('\x1b[2J\x1b[H' + out.join('\n') + '\n');
 }
 
-function runView(render) {
+// Mention matching for human posts from the view: exact or unique prefix
+// against this repo's roster plus live agent names (a deliberate human act).
+function viewMentionResolver(d) {
+  return (input) => {
+    const names = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
+    for (const a of liveAgents()) if (a.name) names.add(a.name);
+    if (names.has(input)) return input;
+    const hits = [...names].filter((n) => n.startsWith(input));
+    return hits.length === 1 ? hits[0] : null;
+  };
+}
+
+function runView(render, { input = false } = {}) {
   let files = listRepoDbFiles();
   let file = initialDbFile();
   if (!file) { console.log('no chatter data yet — run chatter inside a git repo first'); process.exit(0); }
   let d = openDbFile(file);
-  const paint = () => { files = listRepoDbFiles(); render(d, file, files); };
+  let buffer = '';
+  const paint = () => { files = listRepoDbFiles(); render(d, file, files, buffer); };
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.on('data', (b) => {
       const s = b.toString();
-      if (s === 'q' || s === '\x03' || s === '\x1b') process.exit(0);
-      const n = parseInt(s, 10);
-      if (n >= 1 && n <= files.length && files[n - 1] !== file) {
-        file = files[n - 1];
-        d = openDbFile(file);
-        paint();
+      if (s === '\x03' || s === '\x1b') process.exit(0);
+      const switchRepo = (key) => {
+        const n = parseInt(key, 10);
+        if (n >= 1 && n <= files.length && files[n - 1] !== file) {
+          file = files[n - 1];
+          d = openDbFile(file);
+          paint();
+          return true;
+        }
+        return false;
+      };
+      // Read-only views: q closes, number keys switch repos. The input view
+      // treats every printable key as typing (Esc closes it instead).
+      if (!input) {
+        if (s === 'q') process.exit(0);
+        if (/^[1-9]$/.test(s)) switchRepo(s);
+        return;
       }
+      if (s === '\r' || s === '\n') {
+        const body = buffer.trim();
+        buffer = '';
+        if (body) postToChat({ name: humanName(), human: true }, body, d, viewMentionResolver(d));
+        return paint();
+      }
+      if (s === '\x7f' || s === '\b') { buffer = buffer.slice(0, -1); return paint(); }
+      const printable = s.replace(/[\x00-\x1f\x7f]/g, '');
+      if (printable) { buffer += printable; paint(); }
     });
   }
   paint();
@@ -104,6 +139,6 @@ function runView(render) {
 }
 
 const cmdBoard = () => runView(renderBoard);
-const cmdChatView = () => runView(renderChat);
+const cmdChatView = () => runView(renderChat, { input: true });
 
 module.exports = { cmdBoard, cmdChatView };

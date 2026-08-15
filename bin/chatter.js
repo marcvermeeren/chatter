@@ -16,7 +16,11 @@ const argv = process.argv.slice(2).filter((a) => {
 const [cmd, ...args] = argv;
 
 // Plugin entrypoints (run with plugin env, not by agents) and the board pane.
-const HOOKS = { _startup: c.hookStartup, _flush: c.hookFlush, _open_board: c.hookOpenBoard, board: cmdBoard, _chat_view: cmdChatView };
+const HOOKS = {
+  _startup: c.hookStartup, _flush: c.hookFlush,
+  _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat,
+  board: cmdBoard, _chat_view: cmdChatView,
+};
 if (Object.hasOwn(HOOKS, cmd ?? '')) { HOOKS[cmd](); return; }
 
 if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') { console.log(c.help()); return; }
@@ -26,7 +30,7 @@ const COMMANDS = {
   note: c.cmdNote, notes: c.cmdNotes, search: c.cmdNotes, resolve: c.cmdResolve,
   ask: c.cmdAsk, answer: c.cmdAnswer, questions: c.cmdQuestions,
   task: c.cmdTask, handoff: c.cmdHandoff,
-  whoami: c.cmdWhoami, log: c.cmdLog, stats: c.cmdStats,
+  whoami: c.cmdWhoami, iam: c.cmdIam, log: c.cmdLog, stats: c.cmdStats,
 };
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;
 if (!run) die(`unknown command "${cmd}" — try: chatter help`);
