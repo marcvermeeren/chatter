@@ -158,6 +158,17 @@ echo "$ROLE_OUT" | grep -q "only set their own" && ok "agent cannot retitle a te
 # Cross-repo target refused even earlier, by the boundary itself.
 ROLE_OUT2=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$ROOT/bin/chatter.js" role beta "x" 2>&1)
 echo "$ROLE_OUT2" | grep -q "no agent" && ok "cross-repo retitle blocked by the boundary" || fail "cross-repo retitle: $ROLE_OUT2"
+echo "# departure: reap, forget, and departed exclusion"
+$CHF send moved "will be stuck" --queue >/dev/null 2>&1
+env HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w1:p3"}' HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+  FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" HERDR_PLUGIN_STATE_DIR="$HERDR_PLUGIN_STATE_DIR" \
+  node --no-warnings "$ROOT/bin/chatter.js" _reap | grep -q "departed" && ok "_reap marks the closed pane's agent departed" || fail "_reap marks departed"
+$CHF agents | grep -q "moved" && fail "departed agent still in default roster" || ok "departed agent hidden from roster"
+$CHF agents --all | grep "moved" | grep -q "departed" && ok "--all shows it as departed" || fail "--all shows departed"
+$CHF send moved "hi again" >/dev/null 2>&1 && fail "send to departed accepted without --queue" || ok "send to departed refused"
+$CHF brief 1h | grep -q "queued for departed" && ok "brief flags stuck mail" || fail "brief flags stuck mail"
+$CHF forget moved | grep -q "dropped" && ok "forget drops queued mail" || fail "forget drops queued mail"
+$CHF brief 1h | grep -q "queued for departed" && fail "stuck-mail flag persists after forget" || ok "stuck-mail flag cleared"
 unset FAKE_CALLS FAKE_ROSTER
 
 echo "# human-only gates"

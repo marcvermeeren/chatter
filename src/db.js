@@ -80,7 +80,7 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS agents (
     name TEXT PRIMARY KEY, pane_id TEXT, workspace_id TEXT, cwd TEXT,
     repo_root TEXT, branch TEXT, kind TEXT, role TEXT,
-    registered_at TEXT, last_seen_at TEXT);
+    registered_at TEXT, last_seen_at TEXT, departed_at TEXT);
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_agent TEXT, to_agent TEXT, body TEXT,
@@ -114,6 +114,8 @@ function openDbFile(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const d = new DatabaseSync(file);
   d.exec(SCHEMA);
+  // Migration for pre-v0.16 universes.
+  try { d.exec('ALTER TABLE agents ADD COLUMN departed_at TEXT'); } catch { /* exists */ }
   return d;
 }
 

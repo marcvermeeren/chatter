@@ -96,16 +96,19 @@ function editDistance(a, b) {
   return m[a.length][b.length];
 }
 
+// Departed members (pane/worktree gone) are not addressable candidates.
 function rosterNames(d = db()) {
-  return d.prepare('SELECT name FROM agents').all().map((r) => r.name);
+  return d.prepare('SELECT name FROM agents WHERE departed_at IS NULL').all().map((r) => r.name);
 }
 
 // Is a name already claimed anywhere — live agents or any repo's roster?
+// Departed rows free their name (a re-spawn is a comeback: queued mail from
+// before departure delivers when the name verifiably returns).
 // session-wide by design: names must be globally unique.
 function nameTaken(name) {
   if (sessionAgents().some((a) => a.name === name)) return 'a live agent';
   for (const f of listRepoDbFiles()) {
-    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
+    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ? AND departed_at IS NULL').get(name)) {
       return `a registered agent in ${path.basename(path.dirname(f))}`;
     }
   }

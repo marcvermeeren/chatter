@@ -108,13 +108,16 @@ function identity(name, role) {
   return `${label} · @${name}`;
 }
 
-function cmdAgents(me) {
+function cmdAgents(me, args = []) {
+  const all = args.includes('--all');
   const live = teamAgents(); // this repo's team only — never the whole session
-  const registered = db().prepare('SELECT * FROM agents ORDER BY name').all();
+  const registered = db().prepare(
+    all ? 'SELECT * FROM agents ORDER BY name' : 'SELECT * FROM agents WHERE departed_at IS NULL ORDER BY name'
+  ).all();
   const taskBy = inProgressTasksByAssignee();
   const rows = registered.map((a) => {
     const l = matchLive(live, a);
-    return { ...a, status: l ? l.agent_status : 'offline', task: taskBy[a.name] || null };
+    return { ...a, status: a.departed_at ? 'departed' : (l ? l.agent_status : 'offline'), task: taskBy[a.name] || null };
   });
   const open = openQuestions();
   emit(rows, () => {
@@ -501,6 +504,9 @@ function buildBrief(me, d = db(), arg = null) {
   if (dms || unreadChat) lines.push(`✉ ${dms ? `${dms} unread DM${dms > 1 ? 's' : ''}` : ''}${dms && unreadChat ? ' · ' : ''}${unreadChat ? `#chat: ${unreadChat} unread` : ''}`);
   const counts = {};
   for (const a of teamAgents(d)) counts[a.agent_status] = (counts[a.agent_status] || 0) + 1;
+  const stuck = d.prepare(`SELECT COUNT(*) AS n FROM messages m JOIN agents a ON a.name = m.to_agent
+    WHERE m.delivered_at IS NULL AND a.departed_at IS NOT NULL`).get().n;
+  if (stuck) lines.push(`⚠ ${stuck} message${stuck > 1 ? 's' : ''} queued for departed agents (chatter forget <name> cleans up)`);
   lines.push(`agents: ${Object.entries(counts).map(([s, n]) => `${n} ${s}`).join(', ') || 'none live'}`);
   if (!explicit) {
     d.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES (?, 'brief', ?)
@@ -730,7 +736,7 @@ function help() {
   const dbPath = g.repoRoot ? repoDbFile(g.repoRoot) : `${stateRoot()}/repos/<repo>/chatter.db`;
   return `chatter — group chat, DMs, tasks and shared memory for this repo's coding agents
 
-  chatter agents                        who's online: role, branch, task
+  chatter agents [--all]                who's online: role, branch, task (--all incl. departed)
   chatter send <agent> <message...>     DM an agent (lands in their session; --queue for absent agents)
   chatter inbox [--all]                 your unread messages (--all = history)
   chatter post <text...>                post to the repo group chat; @name pushes to that agent
@@ -752,6 +758,7 @@ function help() {
   chatter spawn <name> [--kind k] [--purpose "..."] [--branch B] [--base REF] [--tab]
                                         add a teammate in a NEW WORKTREE (--tab shares this checkout)
   chatter role <agent> <display role...>   set a display role, e.g. "Data / API" · @data-api
+  chatter forget <agent>                retire a departed teammate, drop its queued mail (human only)
   chatter data                          what chatter stores (per repo, sizes)
   chatter purge <repo>|--orphans|--all|--older-than 30d [--yes]   delete stored data
   chatter whoami
@@ -806,6 +813,45 @@ function ensurePointerAndSymlink() {
   }
 }
 
+// Herdr told us a pane or worktree died: roster rows bound to those panes
+// become departed (bookkeeping only — chatter never kills anything itself).
+// Pane ids are never reused, so this signal is exact.
+function hookReap() {
+  const raw = process.env.HERDR_PLUGIN_EVENT_JSON || '';
+  const panes = [...new Set([...raw.matchAll(/"(w\d+:p[A-Za-z0-9]+)"/g)].map((m) => m[1]))];
+  if (!panes.length) return;
+  let n = 0;
+  for (const f of listRepoDbFiles()) {
+    const d = openDbFile(f);
+    for (const pane of panes) {
+      const rows = d.prepare('SELECT name FROM agents WHERE pane_id = ? AND departed_at IS NULL').all(pane);
+      for (const r of rows) {
+        d.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run(now(), r.name);
+        logEvent('system', 'agent_departed', r.name, { pane }, d);
+        n++;
+      }
+    }
+  }
+  if (n) console.log(`marked ${n} agent(s) departed`);
+}
+
+// Human-only manual retirement (for departures the event hook missed):
+// marks the row departed and drops its still-queued mail.
+function cmdForget(me, args) {
+  humanOnly(me, 'chatter forget');
+  const name = (args[0] || '').replace(/^@/, '');
+  if (!name) die('usage: chatter forget <agent>');
+  const d = db();
+  const row = d.prepare('SELECT name, departed_at FROM agents WHERE name = ?').get(name);
+  if (!row) die(`no roster entry for "${name}" — see: chatter agents --all`);
+  if (!row.departed_at) {
+    d.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run(now(), name);
+    logEvent(me.name, 'agent_departed', name, { by: 'forget' });
+  }
+  const dropped = d.prepare('DELETE FROM messages WHERE to_agent = ? AND delivered_at IS NULL').run(name).changes;
+  console.log(`@${name} marked departed${dropped ? `, dropped ${dropped} queued message(s)` : ''} — history kept`);
+}
+
 // Hooks have no single repo context: flush every repo's queue.
 function flushAllRepos() {
   let n = 0;
@@ -841,7 +887,7 @@ const hookOpenChat = () => openPane('chat');
 module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
-  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent, cmdRole, setRole,
+  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent, cmdRole, setRole, cmdForget, hookReap,
   taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

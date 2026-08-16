@@ -292,6 +292,18 @@ role — chatter updates the Herdr pane label and its roster together, so you
 never touch pane plumbing. Humans can retitle anyone; agents only describe
 themselves. Handles never change this way.
 
+### Departure
+
+When a teammate's pane or worktree is closed, a Herdr event hook marks it
+**departed**: it drops out of the roster (visible under `agents --all`),
+@-completion, and sendable targets (`--queue` still works for an expected
+comeback), and `/brief` flags any mail still queued for it. `chatter forget
+<agent>` (human-only) retires one manually and drops its queued mail —
+history is always kept. Re-spawning the same handle is a comeback: mail
+queued before departure delivers when the name verifiably returns. Still no
+lifecycle *management* — chatter never kills or restarts anything; it just
+stops pretending the departed are reachable.
+
 ## Your data
 
 Everything Chatter stores — messages, notes, tasks, events — lives in local

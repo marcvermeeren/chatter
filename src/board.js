@@ -241,7 +241,7 @@ function renderBoard(d, file, files) {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const live = teamAgents(d, { fresh: true });
-  const agents = d.prepare('SELECT * FROM agents ORDER BY name').all();
+  const agents = d.prepare('SELECT * FROM agents WHERE departed_at IS NULL ORDER BY name').all();
   const tasks = d.prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id LIMIT 8").all();
   const notes = d.prepare("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 6").all();
   const msgs = d.prepare("SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC LIMIT 10").all().reverse();
@@ -307,7 +307,7 @@ function runView(render, { input = false } = {}) {
     files = listRepoDbFiles();
     if (!d) { painter(pickerScreen()); return; }
     if (input) {
-      const rows = d.prepare('SELECT name, role FROM agents').all();
+      const rows = d.prepare('SELECT name, role FROM agents WHERE departed_at IS NULL').all();
       const set = new Set(rows.map((r) => r.name));
       ui.roles = new Map(rows.filter((r) => r.role).map((r) => [r.name, r.role]));
       for (const a of teamAgents(d, { fresh: true })) if (a.name) set.add(a.name);

@@ -1,6 +1,6 @@
 id = "chatter"
 name = "Chatter"
-version = "0.15.0"
+version = "0.16.0"
 min_herdr_version = "0.8.0"
 description = "Group chat for coding agents. After install run: herdr plugin action invoke chatter.setup"
 platforms = ["linux", "macos"]
@@ -11,6 +11,14 @@ command = ["node", "--no-warnings", "bin/chatter.js", "_startup"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["node", "--no-warnings", "bin/chatter.js", "_flush"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "--no-warnings", "bin/chatter.js", "_reap"]
+
+[[events]]
+on = "worktree.removed"
+command = ["node", "--no-warnings", "bin/chatter.js", "_reap"]
 
 [[actions]]
 id = "open-board"

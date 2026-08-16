@@ -22,7 +22,7 @@ const [cmd, ...args] = argv;
 
 // Plugin entrypoints (run with plugin env, not by agents) and the board pane.
 const HOOKS = {
-  _startup: c.hookStartup, _flush: c.hookFlush,
+  _startup: c.hookStartup, _flush: c.hookFlush, _reap: c.hookReap,
   _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat,
   _setup_action: s.hookOpenSetup, _setup_wizard: s.wizard,
   board: cmdBoard, _chat_view: cmdChatView, doctor: s.cmdDoctor,
@@ -38,7 +38,7 @@ const COMMANDS = {
   task: c.cmdTask, handoff: c.cmdHandoff,
   whoami: c.cmdWhoami, iam: c.cmdIam, log: c.cmdLog, stats: c.cmdStats,
   setup: s.cmdSetup, brief: c.cmdBrief,
-  data: c.cmdData, purge: c.cmdPurge, spawn: c.cmdSpawn, role: c.cmdRole,
+  data: c.cmdData, purge: c.cmdPurge, spawn: c.cmdSpawn, role: c.cmdRole, forget: c.cmdForget,
 };
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;
 if (!run) die(`unknown command "${cmd}" — try: chatter help`);
