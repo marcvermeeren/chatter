@@ -272,6 +272,10 @@ against your Herdr session.
   ambiently-injected agents from reaching across projects, but a genuinely
   malicious process doesn't need chatter — Herdr's own CLI can prompt any
   pane. The hard boundaries remain your user account and machine.
+- The boundary is **structural**: repo-scoped code can only see live agents
+  through a repo-verified filter (`teamAgents`); the session-wide roster is
+  quarantined to identity/uniqueness code, and a source-level lint in the
+  test suite fails if that ever changes.
 - Identity is honor-system per pane. No network exposure: no sockets opened,
   all SQL parameterized, every subprocess is an argv array (no shell).
 - Stored text is sanitized at *render* time too (window and CLI), so a

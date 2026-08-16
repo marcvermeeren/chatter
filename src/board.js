@@ -4,9 +4,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { liveAgents, matchLive } = require('./herdr');
+const { matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
-const { postToChat, liveAgentInRepo } = require('./team');
+const { postToChat, teamAgents } = require('./team');
 const { taskLabel, buildBrief, spawnAgent } = require('./commands');
 const { toMs } = require('./util');
 const T = require('./tui');
@@ -208,7 +208,7 @@ function runSlash(body, d, ui, paint) {
 function renderBoard(d, file, files) {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
-  const live = liveAgents({ fresh: true });
+  const live = teamAgents(d, { fresh: true });
   const agents = d.prepare('SELECT * FROM agents ORDER BY name').all();
   const tasks = d.prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id LIMIT 8").all();
   const notes = d.prepare("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 6").all();
@@ -244,9 +244,7 @@ function renderBoard(d, file, files) {
 function viewMentionResolver(d) {
   return (input) => {
     const names = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
-    // Live-but-unregistered candidates must verifiably live in this repo —
-    // the popup must not pierce the per-repo boundary.
-    for (const a of liveAgents()) if (a.name && !names.has(a.name) && liveAgentInRepo(a, d)) names.add(a.name);
+    for (const a of teamAgents(d)) if (a.name) names.add(a.name);
     if (names.has(input)) return input;
     const hits = [...names].filter((n) => n.startsWith(input));
     return hits.length === 1 ? hits[0] : null;
@@ -264,20 +262,11 @@ function runView(render, { input = false } = {}) {
   if (!file) { console.log('no chatter data yet — run chatter inside a git repo first'); process.exit(0); }
   let d = openDbFile(file);
   const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: openPointerFor(d), lastMaxId: 0, scrollBaseId: 0 };
-  const inRepoCache = new Map(); // "dbfile|cwd" -> belongs to the viewed repo
   const paint = () => {
     files = listRepoDbFiles();
     if (input) {
       const set = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
-      // Live-but-unregistered names only when they verifiably live in THIS
-      // repo — suggesting names the resolver would refuse is worse than
-      // omitting them.
-      for (const a of liveAgents({ fresh: true })) {
-        if (!a.name || set.has(a.name) || !a.cwd) continue;
-        const key = `${file}|${a.cwd}`;
-        if (!inRepoCache.has(key)) inRepoCache.set(key, liveAgentInRepo(a, d));
-        if (inRepoCache.get(key)) set.add(a.name);
-      }
+      for (const a of teamAgents(d, { fresh: true })) if (a.name) set.add(a.name);
       ui.names = [...set].sort();
     }
     painter(render(d, file, files, ui));

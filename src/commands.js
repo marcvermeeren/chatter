@@ -4,9 +4,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { PLUGIN_ID, herdr, liveAgents, invalidateLiveAgents, matchLive } = require('./herdr');
-const { db, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles, logEvent } = require('./db');
-const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount, nameTaken, sanitizeName } = require('./team');
+const { PLUGIN_ID, herdr, invalidateSessionAgents, matchLive } = require('./herdr');
+const { db, dbFile, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles, logEvent } = require('./db');
+const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount, nameTaken, sanitizeName, teamAgents } = require('./team');
 const { configRoot, humanName } = require('./db');
 const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
 const { clean } = require('./tui');
@@ -100,7 +100,7 @@ function inProgressTasksByAssignee() {
 }
 
 function cmdAgents(me) {
-  const live = liveAgents();
+  const live = teamAgents(); // this repo's team only — never the whole session
   const registered = db().prepare('SELECT * FROM agents ORDER BY name').all();
   const taskBy = inProgressTasksByAssignee();
   const rows = registered.map((a) => {
@@ -136,14 +136,9 @@ function cmdIam(_me, args) {
   if (!args[0]) { console.log(`you are "${humanName()}" — change with: chatter iam <name>`); return; }
   const name = args[0].toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32);
   if (!name) die('usage: chatter iam <name>');
-  // A collision would silently redirect that agent's mail to the human —
-  // check live agents AND every repo's registered roster.
-  if (liveAgents().some((a) => a.name === name)) die(`"${name}" is a live agent's name — pick another`);
-  for (const f of listRepoDbFiles()) {
-    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
-      die(`"${name}" is a registered agent in ${path.basename(path.dirname(f))} — pick another`);
-    }
-  }
+  // A collision would silently redirect that agent's mail to the human.
+  const taken = nameTaken(name);
+  if (taken) die(`"${name}" is ${taken} — pick another`);
   fsx.mkdirSync(configRoot(), { recursive: true });
   fsx.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
   console.log(`you are now "${name}" — agents can reach you with: chatter send ${name} "..." or @${name} in #chat`);
@@ -494,9 +489,8 @@ function buildBrief(me, d = db(), arg = null) {
   const dms = d.prepare("SELECT COUNT(*) AS n FROM messages WHERE to_agent = ? AND read_at IS NULL AND kind != 'mention'").get(me.name).n;
   const unreadChat = chatUnreadCount(me.name, d);
   if (dms || unreadChat) lines.push(`✉ ${dms ? `${dms} unread DM${dms > 1 ? 's' : ''}` : ''}${dms && unreadChat ? ' · ' : ''}${unreadChat ? `#chat: ${unreadChat} unread` : ''}`);
-  const live = liveAgents();
   const counts = {};
-  for (const a of live) counts[a.agent_status] = (counts[a.agent_status] || 0) + 1;
+  for (const a of teamAgents(d)) counts[a.agent_status] = (counts[a.agent_status] || 0) + 1;
   lines.push(`agents: ${Object.entries(counts).map(([s, n]) => `${n} ${s}`).join(', ') || 'none live'}`);
   if (!explicit) {
     d.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES (?, 'brief', ?)
@@ -603,14 +597,19 @@ function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
   if (taken) return fail(`"${name}" is ${taken} — pick another name`);
   const lines = [];
   if (!kind) {
-    const kinds = liveAgents().map((a) => a.agent).filter(Boolean);
+    const kinds = teamAgents(d).map((a) => a.agent).filter(Boolean);
     kind = kinds.sort((a, b) => kinds.filter((k) => k === b).length - kinds.filter((k) => k === a).length)[0];
-    if (!kind) return fail('no --kind given and no live agents to infer one from (run: herdr agent  for installed kinds)');
-    lines.push(`no kind given — using ${kind} (majority of live agents)`);
+    if (!kind) return fail('no --kind given and no agents in this repo to infer one from (run: herdr agent  for installed kinds)');
+    lines.push(`no kind given — using ${kind} (majority of this repo's agents)`);
   }
-  const g = gitInfo();
-  if (!g.toplevel) return fail('spawn runs inside a git repo (the agent joins this repo\'s team)');
-  const tabArgs = ['tab', 'create', '--label', name, '--cwd', g.toplevel, '--no-focus'];
+  // The spawn target repo comes from the DB handle, never process.cwd():
+  // inside the chat popup, cwd is the plugin's own checkout.
+  const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
+  const repoRoot = (mark && mark.value) || gitInfo().repoRoot;
+  if (!repoRoot || repoDbFile(repoRoot) !== dbFile(d)) {
+    return fail('cannot determine this universe\'s repo — run one chatter command from a shell in it first');
+  }
+  const tabArgs = ['tab', 'create', '--label', name, '--cwd', repoRoot, '--no-focus'];
   if (process.env.HERDR_WORKSPACE_ID) tabArgs.push('--workspace', process.env.HERDR_WORKSPACE_ID);
   const tab = herdr(tabArgs);
   if (!tab.ok) return fail(`could not create a tab: ${tab.raw}`);
@@ -621,7 +620,7 @@ function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
     return fail(`agent start failed: ${start.raw}`);
   }
   herdr(['pane', 'rename', pane, name]); // pane label = role, feeds the roster
-  invalidateLiveAgents(); // roster changed — the cached list predates the spawn
+  invalidateSessionAgents(); // roster changed — the cached list predates the spawn
   logEvent(me.name, 'agent_spawned', name, { kind, by: me.name, purpose: purpose || null }, d);
   postToChat(me, `spawned ${name} (${kind})${purpose ? `: ${purpose}` : ''}`, d, () => null);
   lines.push(`${name} is up (${kind}, pane ${pane})`);

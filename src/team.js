@@ -4,15 +4,29 @@
 // deliberately refused.
 
 const path = require('node:path');
-const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
+const { herdr, sessionAgents, invalidateSessionAgents, paneLabel } = require('./herdr');
 const { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } = require('./db');
 const { die } = require('./util');
 
 // Does this live agent belong to the repo a DB handle serves?
+const _inRepoCache = new Map(); // `${dbfile}|${cwd}` -> boolean
 function liveAgentInRepo(agent, d) {
   if (!agent.cwd) return false;
-  const g = gitInfo(agent.cwd);
-  return !!g.repoRoot && repoDbFile(g.repoRoot) === dbFile(d);
+  const key = `${dbFile(d)}|${agent.cwd}`;
+  if (!_inRepoCache.has(key)) {
+    const g = gitInfo(agent.cwd);
+    _inRepoCache.set(key, !!g.repoRoot && repoDbFile(g.repoRoot) === dbFile(d));
+  }
+  return _inRepoCache.get(key);
+}
+
+// THE chokepoint for repo-scoped code: live agents that verifiably belong to
+// this repo — registered pane, or cwd inside the repo. Everything outside
+// this module must see live agents only through here (enforced by the
+// boundary lint in test/smoke.sh).
+function teamAgents(d = db(), { fresh = false } = {}) {
+  const regPanes = new Set(d.prepare('SELECT pane_id FROM agents').all().map((r) => r.pane_id));
+  return sessionAgents({ fresh }).filter((a) => regPanes.has(a.pane_id) || liveAgentInRepo(a, d));
 }
 
 // ---------------------------------------------------------------- identity
@@ -30,7 +44,9 @@ function whoami() {
   const paneId = process.env.HERDR_PANE_ID || null;
   const human = { name: humanName(), paneId, human: true };
   if (!paneId) return human;
-  const live = liveAgents();
+  // session-wide by design: own-pane lookup + name uniqueness (Herdr agent
+  // names are unique across the whole session).
+  const live = sessionAgents();
   const me = live.find((a) => a.pane_id === paneId);
   if (!me) return human;
   const label = paneLabel(paneId);
@@ -45,7 +61,7 @@ function whoami() {
     while (taken.has(candidate)) candidate = `${base}-${i++}`.slice(0, 32);
     if (herdr(['agent', 'rename', paneId, candidate]).ok) {
       name = candidate;
-      invalidateLiveAgents();
+      invalidateSessionAgents();
     }
   }
   if (!name) return { name: `pane:${paneId}`, paneId, human: false };
@@ -81,8 +97,9 @@ function rosterNames() {
 }
 
 // Is a name already claimed anywhere — live agents or any repo's roster?
+// session-wide by design: names must be globally unique.
 function nameTaken(name) {
-  if (liveAgents().some((a) => a.name === name)) return 'a live agent';
+  if (sessionAgents().some((a) => a.name === name)) return 'a live agent';
   for (const f of listRepoDbFiles()) {
     if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
       return `a registered agent in ${path.basename(path.dirname(f))}`;
@@ -97,14 +114,9 @@ function nameTaken(name) {
 function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
   const candidates = new Set([...rosterNames(), humanName()]);
   if (candidates.has(input)) return input; // hot path: registered exact match
-  // Live named agents not yet registered join the candidate pool only if
-  // their pane's cwd belongs to this repo (keeps per-repo isolation).
-  const ourRepo = gitInfo().repoRoot;
-  for (const a of liveAgents()) {
-    if (a.name && !candidates.has(a.name) && a.cwd && gitInfo(a.cwd).repoRoot === ourRepo) {
-      candidates.add(a.name);
-    }
-  }
+  // Live named agents not yet registered join the pool only when they
+  // verifiably belong to this repo (per-repo isolation).
+  for (const a of teamAgents()) if (a.name) candidates.add(a.name);
   if (candidates.has(input)) return input;
   const lower = input.toLowerCase();
   const prefix = [...candidates].filter((n) => n.toLowerCase().startsWith(lower));
@@ -134,11 +146,13 @@ function resolveTarget(name, live, d = db()) {
     return { paneId: byName.pane_id, status: byName.agent_status };
   }
   // Last-known pane, but only if it isn't now occupied by a differently-named
-  // agent — otherwise the message would land in the wrong session.
+  // agent AND still works in this repo (a pane can be cd'd elsewhere).
   const row = registered;
   if (row) {
     const atPane = live.find((x) => x.pane_id === row.pane_id);
-    if (atPane && !atPane.name) return { paneId: atPane.pane_id, status: atPane.agent_status };
+    if (atPane && !atPane.name && liveAgentInRepo(atPane, d)) {
+      return { paneId: atPane.pane_id, status: atPane.agent_status };
+    }
   }
   return null;
 }
@@ -205,7 +219,7 @@ function tryDeliver(msg, live, d = db()) {
 function flushPending(d = db()) {
   const pending = d.prepare('SELECT * FROM messages WHERE delivered_at IS NULL ORDER BY id').all();
   if (!pending.length) return 0;
-  const live = liveAgents();
+  const live = sessionAgents();
   let n = 0;
   for (const m of pending) if (tryDeliver(m, live, d)) n++;
   return n;
@@ -216,7 +230,7 @@ function sendMessage(from, to, body, kind = 'chat', refId = null, d = db()) {
     'INSERT INTO messages (from_agent, to_agent, body, kind, ref_id, created_at) VALUES (?,?,?,?,?,?)'
   ).run(from, to, body, kind, refId, now());
   const msg = { id: r.lastInsertRowid, from_agent: from, to_agent: to, body, kind, ref_id: refId };
-  const live = liveAgents();
+  const live = sessionAgents();
   if (to === humanName()) {
     return tryDeliver(msg, live, d) ? { delivered: true } : { delivered: false, reason: 'toast failed — waiting in the feed' };
   }
@@ -243,7 +257,7 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
   }
   if (everyone) {
     if (me.human) {
-      for (const a of liveAgents()) {
+      for (const a of teamAgents(d)) {
         if (!a.name || a.name === me.name) continue;
         const hit = resolveMention(a.name);
         if (hit) mentioned.add(hit);
@@ -261,6 +275,6 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
 }
 
 module.exports = {
-  sanitizeName, whoami, resolveRecipient, resolveTarget, liveAgentInRepo, nameTaken,
+  sanitizeName, whoami, resolveRecipient, resolveTarget, liveAgentInRepo, teamAgents, nameTaken,
   formatDelivery, tryDeliver, flushPending, sendMessage, postToChat, chatUnreadCount,
 };

@@ -101,6 +101,17 @@ $CH purge --orphans --yes | grep -q "deleted" && ok "orphan purged" || fail "orp
 $CH data | grep -q "ORPHAN" && fail "orphan still listed" || ok "orphan gone from data"
 $CH purge --older-than 0h --yes >/dev/null 2>&1 && ok "older-than trim runs" || fail "older-than trim runs"
 
+echo "# boundary lint: repo-scoped code must not touch the session-wide roster"
+if grep -n 'sessionAgents' "$ROOT/src/commands.js" "$ROOT/src/board.js" "$ROOT/bin/chatter.js" >/dev/null 2>&1; then
+  fail "sessionAgents leaked into repo-scoped code (commands/board/bin)"
+else
+  ok "session-wide roster quarantined to team.js/setup.js"
+fi
+grep -q 'teamAgents' "$ROOT/src/commands.js" && grep -q 'teamAgents' "$ROOT/src/board.js" \
+  && ok "repo-scoped surfaces use teamAgents(d)" || fail "repo-scoped surfaces use teamAgents(d)"
+grep -rn 'liveAgents(' "$ROOT/src" "$ROOT/bin" >/dev/null 2>&1 \
+  && fail "old liveAgents() name still referenced" || ok "old liveAgents() name fully retired"
+
 echo "# spawn (failure path — no herdr available here)"
 $CH spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
 

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { PLUGIN_ID, HERDR, herdr, liveAgents } = require('./herdr');
+const { PLUGIN_ID, HERDR, herdr, sessionAgents } = require('./herdr');
 const { configRoot, humanName, stateRoot, listRepoDbFiles, openDbFile, gitInfo } = require('./db');
 const { die, parseFlags } = require('./util');
 const T = require('./tui');
@@ -108,7 +108,8 @@ function doctorChecks() {
   add(cfg.includes(`${PLUGIN_ID}.open-chat`), 'chat window keybinding bound', 'run: chatter setup (adds a [[keys.command]] block)');
   const g = gitInfo();
   add(null, g.repoRoot ? `current repo: ${path.basename(g.repoRoot)}` : 'not inside a git repo (chatter is per-repo)');
-  add(null, `live agents visible: ${liveAgents().length}`);
+  // session-wide by design: doctor is a machine-level diagnostic
+  add(null, `live agents visible (session-wide): ${sessionAgents().length}`);
   return checks;
 }
 
