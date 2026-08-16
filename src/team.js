@@ -5,7 +5,7 @@
 
 const path = require('node:path');
 const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
-const { db, dbFile, now, gitInfo, humanName, repoDbFile } = require('./db');
+const { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent } = require('./db');
 const { die } = require('./util');
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -50,6 +50,7 @@ function whoami() {
   }
   if (!name) return { name: `pane:${paneId}`, paneId, human: false };
   const g = gitInfo();
+  const isNew = !db().prepare('SELECT 1 FROM agents WHERE name = ?').get(name);
   db().prepare(`
     INSERT INTO agents (name, pane_id, workspace_id, cwd, repo_root, branch, kind, role, registered_at, last_seen_at)
     VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -58,6 +59,7 @@ function whoami() {
       kind=excluded.kind, role=excluded.role, last_seen_at=excluded.last_seen_at
   `).run(name, paneId, me ? me.workspace_id : null, process.cwd(), g.repoRoot, g.branch,
          me ? me.agent : null, label, now(), now());
+  if (isNew) logEvent(name, 'agent_joined', name, { kind: me.agent || null, pane: paneId });
   return { name, paneId, human: false, status: me ? me.agent_status : null };
 }
 

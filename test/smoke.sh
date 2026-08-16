@@ -31,6 +31,8 @@ check "note round-trip"                $CH note "hello world" --type discovery
 $CH notes hello | grep -q "hello world" && ok "notes search" || fail "notes search"
 check "question opens"                 $CH ask "what is up?"
 $CH questions | grep -q "what is up" && ok "questions lists open" || fail "questions lists open"
+QID=$($CH questions --json | node -e "console.log(JSON.parse(require('fs').readFileSync(0))[0].id)")
+check "question answered"              $CH answer "$QID" "not much"
 $CH agents --json | node -e "JSON.parse(require('fs').readFileSync(0))" && ok "--json parses" || fail "--json parses"
 $CH stats >/dev/null 2>&1 && ok "stats runs" || fail "stats runs"
 
@@ -67,6 +69,24 @@ cd "$REPO_B"
 $CH notes 2>/dev/null | grep -q "hello world" && fail "repo B sees repo A notes" || ok "repo B is an empty universe"
 cd "$TMP"
 $CH notes >/dev/null 2>&1 && fail "runs outside a repo" || ok "refuses outside a git repo"
+
+echo "# ledger + brief"
+cd "$REPO"
+DBFILE=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)
+KINDS=$(sqlite3 "$DBFILE" "SELECT DISTINCT kind FROM events ORDER BY kind" | tr '\n' ' ')
+echo "$KINDS" | grep -q "task_created" && echo "$KINDS" | grep -q "question_opened" \
+  && echo "$KINDS" | grep -q "question_answered" && echo "$KINDS" | grep -q "note_created" \
+  && ok "ledger records events ($KINDS)" || fail "ledger missing kinds (got: $KINDS)"
+$CH task create "brief test task" >/dev/null 2>&1
+OUT=$($CH brief --json)
+echo "$OUT" | node -e "const b=JSON.parse(require('fs').readFileSync(0)); if(!Array.isArray(b.lines)||!b.lines.length) process.exit(1)" \
+  && ok "brief --json returns lines" || fail "brief --json returns lines"
+echo "$OUT" | grep -q "brief test task" && ok "brief shows new task" || fail "brief shows new task"
+# The default-window call above advanced the caller's mark: the same task
+# must NOT reappear in the next default brief.
+sleep 1
+$CH brief | grep -q "brief test task" && fail "brief mark did not advance" || ok "brief mark advances (task not repeated)"
+$CH brief 2h | grep -q "brief test task" && ok "explicit window still sees it" || fail "explicit window still sees it"
 
 echo "# setup --yes + doctor"
 SETHOME="$TMP/sethome"; mkdir -p "$SETHOME/.config/herdr" "$SETHOME/.local/bin"

@@ -97,6 +97,10 @@ const SCHEMA = `
     branch TEXT, commit_sha TEXT, files_json TEXT, tests TEXT, next_steps TEXT,
     status TEXT DEFAULT 'pending', created_at TEXT);
   CREATE TABLE IF NOT EXISTS chat_reads (agent TEXT PRIMARY KEY, last_read_id INTEGER);
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT, actor TEXT, kind TEXT, ref TEXT, data TEXT);
+  CREATE TABLE IF NOT EXISTS ui_marks (agent TEXT, mark TEXT, value TEXT, PRIMARY KEY (agent, mark));
   CREATE INDEX IF NOT EXISTS idx_messages_pending ON messages (delivered_at) WHERE delivered_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages (to_agent, read_at);
 `;
@@ -137,4 +141,12 @@ const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 // Which on-disk file a handle is operating on (repo-boundary checks).
 const dbFile = (d) => d.prepare("SELECT file FROM pragma_database_list WHERE name='main'").get().file;
 
-module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, dbFile, now };
+// Append-only activity ledger. Silent for now; future briefs/reports read it.
+function logEvent(actor, kind, ref, data = null, d = db()) {
+  try {
+    d.prepare('INSERT INTO events (at, actor, kind, ref, data) VALUES (?,?,?,?,?)')
+      .run(now(), actor, kind, ref, data ? JSON.stringify(data).slice(0, 1024) : null);
+  } catch { /* the ledger must never break a command */ }
+}
+
+module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, dbFile, now, logEvent };

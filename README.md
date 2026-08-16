@@ -190,9 +190,14 @@ fields to maintain — purpose lives in names the human already gave.
 - `chatter stats` — the measurement rig: message/post volume per author,
   delivery latency, task and handoff throughput, dead-ends recorded, question
   time-to-answer.
+- An append-only **event ledger** silently records team activity (task,
+  question, handoff, and note transitions) for future briefs and reports.
 
 ### Views
 - `--entrypoint chat`: the chat window (input line, scrolling, completion).
+  Lines starting with `/` are **private slash commands** — rendered only for
+  you, never posted: `/brief [today|2h|30m]`, `/brief share` (the one
+  explicit way to publish a brief to #chat), `/clear`.
 - `--entrypoint board`: read-only overview — agents with live status dots,
   role, branch, and current task; recent chat; tasks; shared memory.
 - Both follow the focused workspace's repo. The board switches repos with
@@ -214,6 +219,7 @@ chatter agents                        roster: status, role, branch, task
 chatter send <agent> <msg> [--queue]  DM into a live session
 chatter post <msg>                    group chat (@name pushes, @everyone human-only)
 chatter chat [--limit N] [--all]      read the channel (marks it read)
+chatter brief [today|2h|30m]          what changed since you last checked
 chatter inbox [--all]                 your mail
 chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
 chatter notes [query] [--all]         shared scratchpad

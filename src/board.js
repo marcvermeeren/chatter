@@ -7,7 +7,7 @@ const path = require('node:path');
 const { liveAgents, matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
 const { postToChat, liveAgentInRepo } = require('./team');
-const { taskLabel } = require('./commands');
+const { taskLabel, buildBrief } = require('./commands');
 const { toMs } = require('./util');
 const T = require('./tui');
 
@@ -122,7 +122,13 @@ function renderChat(d, file, files, ui) {
     }
   }
 
-  const feedH = Math.max(3, height - 4);
+  // Private block (slash-command results) sits above the input bar and
+  // borrows rows from the feed. Never stored, never posted.
+  const block = ui.block
+    ? [`  ${T.FAINT}┌ ${ui.block.title} — only you (/clear dismisses)${T.RESET}`,
+       ...ui.block.lines.map((l) => `  ${T.FAINT}│${T.RESET} ${l}`)]
+    : [];
+  const feedH = Math.max(3, height - 4 - block.length);
   const all = buildFeedLines(rows, width, human, ui.openPointer);
   ui.maxOffset = Math.max(0, all.length - feedH);
   ui.offset = Math.min(ui.offset, ui.maxOffset);
@@ -154,7 +160,29 @@ function renderChat(d, file, files, ui) {
       ? `   ${ui.status}`
       : `   ${T.FAINT}Enter posts as ${human} · Tab completes @ · ↑↓ scroll · Esc closes${T.RESET}`;
 
-  return [headerBar(file, files, width), ...visible, sep, inputRow, bottom];
+  return [headerBar(file, files, width), ...visible, ...block, sep, inputRow, bottom];
+}
+
+// Slash commands typed in the chat input. Results are private (ui.block).
+function runSlash(body, d, ui) {
+  const [cmd, ...rest] = body.slice(1).split(/\s+/);
+  if (cmd === 'clear') { ui.block = null; return; }
+  if (cmd === 'brief' && rest[0] === 'share') {
+    if (!ui.lastBrief) { ui.block = { title: 'brief', lines: ['nothing to share — run /brief first'] }; return; }
+    postToChat({ name: humanName(), human: true }, `brief (since ${ui.lastBrief.since}):\n${ui.lastBrief.lines.join('\n')}`, d, viewMentionResolver(d));
+    ui.block = null;
+    ui.status = `${T.GREEN}✓ brief shared to #chat${T.RESET}`;
+    return;
+  }
+  if (cmd === 'brief') {
+    try {
+      const b = buildBrief({ name: humanName(), human: true }, d, rest[0] || null);
+      ui.lastBrief = b;
+      ui.block = { title: `brief · since ${b.since}`, lines: [...b.lines, '', `${T.FAINT}/brief share posts this to #chat${T.RESET}`] };
+    } catch (e) { ui.block = { title: 'brief', lines: [String(e.message)] }; }
+    return;
+  }
+  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/clear'] };
 }
 
 // -------------------------------------------------------------------- board
@@ -259,7 +287,10 @@ function runView(render, { input = false } = {}) {
         case 'enter': {
           const body = ui.buffer.trim();
           ui.buffer = ''; ui.offset = 0;
-          if (body) {
+          if (body.startsWith('/')) {
+            runSlash(body, d, ui);
+          } else if (body) {
+            ui.block = null;
             const { pushed, warnings } = postToChat({ name: humanName(), human: true }, body, d, viewMentionResolver(d));
             ui.status = warnings.length ? `${T.YELLOW}⚠ ${warnings.join(' · ')}${T.RESET}`
               : pushed.length ? `${T.GREEN}✓ pushed to ${pushed.join(', ')}${T.RESET}` : `${T.GREEN}✓ posted${T.RESET}`;

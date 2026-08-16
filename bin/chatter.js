@@ -37,7 +37,7 @@ const COMMANDS = {
   ask: c.cmdAsk, answer: c.cmdAnswer, questions: c.cmdQuestions,
   task: c.cmdTask, handoff: c.cmdHandoff,
   whoami: c.cmdWhoami, iam: c.cmdIam, log: c.cmdLog, stats: c.cmdStats,
-  setup: s.cmdSetup,
+  setup: s.cmdSetup, brief: c.cmdBrief,
 };
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;
 if (!run) die(`unknown command "${cmd}" — try: chatter help`);
