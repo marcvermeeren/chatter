@@ -818,18 +818,33 @@ function ensurePointerAndSymlink() {
 // Pane ids are never reused, so this signal is exact.
 function hookReap() {
   const raw = process.env.HERDR_PLUGIN_EVENT_JSON || '';
+  // pane.closed events name the exact pane; worktree.removed / workspace
+  // teardown events name only the WORKSPACE — and pane ids are
+  // workspace-qualified (w5:p1), so a dead workspace retires every roster
+  // row whose pane lives under it.
+  const event = process.env.HERDR_PLUGIN_EVENT || '';
   const panes = [...new Set([...raw.matchAll(/"(w\d+:p[A-Za-z0-9]+)"/g)].map((m) => m[1]))];
-  if (!panes.length) return;
+  // Workspace-wide reaping ONLY for workspace-level teardown events — a
+  // pane.closed payload may mention its workspace, and one closed pane must
+  // never retire the whole workspace's team.
+  const workspaces = event.startsWith('worktree.') || event.startsWith('workspace.')
+    ? [...new Set([...raw.matchAll(/"(w\d+)"/g)].map((m) => m[1]))]
+    : [];
+  if (!panes.length && !workspaces.length) return;
   let n = 0;
   for (const f of listRepoDbFiles()) {
     const d = openDbFile(f);
+    const doomed = new Set();
     for (const pane of panes) {
-      const rows = d.prepare('SELECT name FROM agents WHERE pane_id = ? AND departed_at IS NULL').all(pane);
-      for (const r of rows) {
-        d.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run(now(), r.name);
-        logEvent('system', 'agent_departed', r.name, { pane }, d);
-        n++;
-      }
+      for (const r of d.prepare('SELECT name FROM agents WHERE pane_id = ? AND departed_at IS NULL').all(pane)) doomed.add(r.name);
+    }
+    for (const ws of workspaces) {
+      for (const r of d.prepare("SELECT name FROM agents WHERE pane_id LIKE ? AND departed_at IS NULL").all(`${ws}:%`)) doomed.add(r.name);
+    }
+    for (const name of doomed) {
+      d.prepare('UPDATE agents SET departed_at = ? WHERE name = ?').run(now(), name);
+      logEvent('system', 'agent_departed', name, { via: 'reap' }, d);
+      n++;
     }
   }
   if (n) console.log(`marked ${n} agent(s) departed`);

@@ -169,6 +169,18 @@ $CHF send moved "hi again" >/dev/null 2>&1 && fail "send to departed accepted wi
 $CHF brief 1h | grep -q "queued for departed" && ok "brief flags stuck mail" || fail "brief flags stuck mail"
 $CHF forget moved | grep -q "dropped" && ok "forget drops queued mail" || fail "forget drops queued mail"
 $CHF brief 1h | grep -q "queued for departed" && fail "stuck-mail flag persists after forget" || ok "stuck-mail flag cleared"
+# Workspace-level teardown (worktree.removed carries only the workspace id) —
+# and one closed pane must never reap the whole workspace.
+sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,registered_at,last_seen_at) VALUES ('gamma','w7:p1','x','x'),('delta','w7:p2','x','x')"
+REAP="env HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$FAKE_CALLS FAKE_ROSTER=$FAKE_ROSTER HERDR_PLUGIN_STATE_DIR=$HERDR_PLUGIN_STATE_DIR node --no-warnings $ROOT/bin/chatter.js _reap"
+env HERDR_PLUGIN_EVENT="pane.closed" HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w7:p1","workspace_id":"w7"}' $REAP >/dev/null
+G=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='gamma'")
+D=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delta'")
+[ "$G" = "1" ] && [ "$D" = "0" ] && ok "pane.closed reaps only its own pane" || fail "pane.closed overreach (gamma=$G delta=$D)"
+env HERDR_PLUGIN_EVENT="worktree.removed" HERDR_PLUGIN_EVENT_JSON='{"type":"worktree_removed","workspace_id":"w7","worktree":{"path":"/x"}}' $REAP | grep -q departed \
+  && ok "worktree.removed reaps by workspace id" || fail "worktree.removed reaps by workspace id"
+D2=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delta'")
+[ "$D2" = "1" ] && ok "workspace teardown retired the remaining agent" || fail "workspace teardown retired delta"
 unset FAKE_CALLS FAKE_ROSTER
 
 echo "# human-only gates"
