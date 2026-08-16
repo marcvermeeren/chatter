@@ -68,6 +68,21 @@ $CH notes 2>/dev/null | grep -q "hello world" && fail "repo B sees repo A notes"
 cd "$TMP"
 $CH notes >/dev/null 2>&1 && fail "runs outside a repo" || ok "refuses outside a git repo"
 
+echo "# setup --yes + doctor"
+SETHOME="$TMP/sethome"; mkdir -p "$SETHOME/.config/herdr" "$SETHOME/.local/bin"
+cd "$REPO"
+HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1 && ok "setup --yes runs" || fail "setup --yes runs"
+grep -q 'ui.toast' "$SETHOME/.config/herdr/config.toml" && ok "toast block written" || fail "toast block written"
+grep -q 'chatter.open-chat' "$SETHOME/.config/herdr/config.toml" && ok "keybinding written" || fail "keybinding written"
+HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
+N=$(grep -c 'ui.toast' "$SETHOME/.config/herdr/config.toml")
+[ "$N" = "1" ] && ok "setup is idempotent (no duplicate blocks)" || fail "duplicate blocks after rerun ($N)"
+printf '[ui.toast]\ndelivery = "off"\n' > "$SETHOME/.config/herdr/config.toml"
+HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
+grep -q 'delivery = "off"' "$SETHOME/.config/herdr/config.toml" && ok "existing [ui.toast] respected" || fail "existing [ui.toast] overwritten"
+$CH doctor >/dev/null 2>&1; RC=$?
+[ "$RC" = "0" ] || [ "$RC" = "1" ] && ok "doctor runs (exit $RC)" || fail "doctor crashed"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = "0" ]

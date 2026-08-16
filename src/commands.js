@@ -530,6 +530,12 @@ function flushAllRepos() {
 
 function hookStartup() {
   ensurePointerAndSymlink();
+  // First run on this machine? Nudge toward setup (best effort — reaches
+  // only users with toasts already on; harmless otherwise).
+  if (!fs.existsSync(path.join(configRoot(), 'name'))) {
+    herdr(['notification', 'show', 'chatter installed',
+      '--body', 'finish setup: herdr plugin action invoke chatter.setup', '--sound', 'none']);
+  }
   const n = flushAllRepos();
   console.log(`chatter startup: ready${n ? `, flushed ${n} queued message(s)` : ''}`);
 }
@@ -551,6 +557,6 @@ module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats,
-  taskLabel, openQuestions, help,
+  taskLabel, openQuestions, help, ensurePointerAndSymlink, flushAllRepos,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

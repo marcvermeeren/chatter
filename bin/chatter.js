@@ -5,9 +5,10 @@
 // Entry point only — see src/ for the implementation.
 
 const { setJsonOut, die } = require('../src/util');
-const { whoami, flushPending } = require('../src/team');
+const { whoami } = require('../src/team');
 const c = require('../src/commands');
 const { cmdBoard, cmdChatView } = require('../src/board');
+const s = require('../src/setup');
 
 // Message content is sacred: commands whose args are free text never have
 // flags plucked out of them. Everything else accepts --json anywhere.
@@ -23,7 +24,8 @@ const [cmd, ...args] = argv;
 const HOOKS = {
   _startup: c.hookStartup, _flush: c.hookFlush,
   _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat,
-  board: cmdBoard, _chat_view: cmdChatView,
+  _setup_action: s.hookOpenSetup, _setup_wizard: s.wizard,
+  board: cmdBoard, _chat_view: cmdChatView, doctor: s.cmdDoctor,
 };
 if (Object.hasOwn(HOOKS, cmd ?? '')) { HOOKS[cmd](); return; }
 
@@ -35,6 +37,7 @@ const COMMANDS = {
   ask: c.cmdAsk, answer: c.cmdAnswer, questions: c.cmdQuestions,
   task: c.cmdTask, handoff: c.cmdHandoff,
   whoami: c.cmdWhoami, iam: c.cmdIam, log: c.cmdLog, stats: c.cmdStats,
+  setup: s.cmdSetup,
 };
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;
 if (!run) die(`unknown command "${cmd}" — try: chatter help`);
@@ -45,5 +48,6 @@ try {
   if (process.env.CHATTER_DEBUG) throw e;
   die(`chatter: ${e.message}`);
 }
-// Piggyback: any chatter activity flushes queued mail for everyone.
-try { flushPending(); } catch { /* best effort */ }
+// Piggyback: any chatter activity flushes queued mail for everyone,
+// across all repos (works even when this command ran outside one).
+try { c.flushAllRepos(); } catch { /* best effort */ }

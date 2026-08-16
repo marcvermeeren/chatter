@@ -1,8 +1,8 @@
 id = "chatter"
 name = "Chatter"
-version = "0.8.0"
+version = "0.9.0"
 min_herdr_version = "0.8.0"
-description = "Group chat for coding agents: cross-worktree messages, shared notes, tasks, and handoffs"
+description = "Group chat for coding agents. After install run: herdr plugin action invoke chatter.setup"
 platforms = ["linux", "macos"]
 
 [[startup]]
@@ -23,6 +23,20 @@ id = "open-chat"
 title = "Open group chat"
 contexts = ["global", "workspace", "pane"]
 command = ["node", "--no-warnings", "bin/chatter.js", "_open_chat"]
+
+[[actions]]
+id = "setup"
+title = "Set up Chatter (wizard)"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "--no-warnings", "bin/chatter.js", "_setup_action"]
+
+[[panes]]
+id = "setup"
+title = "Chatter setup"
+placement = "popup"
+width = "70%"
+height = "70%"
+command = ["node", "--no-warnings", "bin/chatter.js", "_setup_wizard"]
 
 [[panes]]
 id = "board"
