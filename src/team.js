@@ -63,6 +63,9 @@ function whoami() {
     if (herdr(['agent', 'rename', paneId, candidate]).ok) {
       name = candidate;
       invalidateSessionAgents();
+      if (candidate !== base) {
+        console.error(`note: "@${base}" was taken — you are "@${candidate}"`);
+      }
     }
   }
   if (!name) return { name: `pane:${paneId}`, paneId, human: false };

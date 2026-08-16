@@ -7,7 +7,16 @@ const path = require('node:path');
 const { matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
 const { postToChat, teamAgents } = require('./team');
-const { taskLabel, buildBrief, spawnAgent } = require('./commands');
+const { taskLabel, buildBrief, spawnAgent, identity } = require('./commands');
+const { sanitizeName } = require('./team');
+
+// Colored identity for TUI rows: dim display label, colored @handle.
+function identityColored(name, role) {
+  const label = (role || '').trim();
+  if (!label || sanitizeName(label) === name) return `${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+  return `${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+}
+const padVis = (s, w) => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
 const { toMs } = require('./util');
 const T = require('./tui');
 
@@ -165,7 +174,11 @@ function renderChat(d, file, files, ui) {
   const mention = ui.buffer.match(/@([a-z0-9_-]*)$/);
   const hits = mention ? ui.names.filter((n) => n.startsWith(mention[1])) : [];
   const bottom = hits.length
-    ? `   ${hits.map((n) => `${T.fg(T.authorHue(n))}@${n}${T.RESET}`).join('  ')}  ${T.FAINT}Tab completes${T.RESET}`
+    ? `   ${hits.map((n) => {
+      const role = (ui.roles && ui.roles.get(n)) || '';
+      const label = role.trim() && sanitizeName(role) !== n ? `${T.FAINT}${role.trim()}${T.RESET} ` : '';
+      return `${label}${T.fg(T.authorHue(n))}@${n}${T.RESET}`;
+    }).join('   ')}  ${T.FAINT}Tab completes${T.RESET}`
     : ui.status
       ? `   ${ui.status}`
       : `   ${T.FAINT}Enter posts as ${human} · Tab completes @ · ↑↓ scroll · Esc closes${T.RESET}`;
@@ -227,7 +240,7 @@ function renderBoard(d, file, files) {
     const l = matchLive(live, a);
     const st = l ? l.agent_status : 'offline';
     const t = taskBy[a.name];
-    out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${T.author(a.name)}${' '.repeat(Math.max(1, 19 - a.name.length))}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.role || a.branch || '').padEnd(20)} ${t ? t.id : ''}`.trimEnd());
+    out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(identityColored(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
   }
   out.push('', ` ${T.BOLD}Group chat${T.RESET}`);
   if (!msgs.length) out.push(`   ${T.FAINT}(no posts yet)${T.RESET}`);
@@ -278,7 +291,9 @@ function runView(render, { input = false } = {}) {
     files = listRepoDbFiles();
     if (!d) { painter(pickerScreen()); return; }
     if (input) {
-      const set = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
+      const rows = d.prepare('SELECT name, role FROM agents').all();
+      const set = new Set(rows.map((r) => r.name));
+      ui.roles = new Map(rows.filter((r) => r.role).map((r) => [r.name, r.role]));
       for (const a of teamAgents(d, { fresh: true })) if (a.name) set.add(a.name);
       ui.names = [...set].sort();
     }

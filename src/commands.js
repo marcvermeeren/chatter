@@ -99,6 +99,15 @@ function inProgressTasksByAssignee() {
   return Object.fromEntries(rows.map((t) => [t.assignee, t]));
 }
 
+// The one identity rendering: display label with the canonical handle always
+// visible. Collapses when there is no label (or label ≈ handle) — never an
+// empty "· @name". Labels are descriptive; only the @handle is addressable.
+function identity(name, role) {
+  const label = (role || '').trim();
+  if (!label || sanitizeName(label) === name) return `@${name}`;
+  return `${label} · @${name}`;
+}
+
 function cmdAgents(me) {
   const live = teamAgents(); // this repo's team only — never the whole session
   const registered = db().prepare('SELECT * FROM agents ORDER BY name').all();
@@ -110,15 +119,15 @@ function cmdAgents(me) {
   const open = openQuestions();
   emit(rows, () => {
     const known = new Set(registered.map((a) => a.name));
-    const row = (mark, name, status, role, branch, tail) =>
-      `${mark} ${name.padEnd(20)} ${status.padEnd(9)} ${(role || '-').padEnd(18)} ${(branch || '-').padEnd(20)} ${tail}`.trimEnd();
+    const row = (mark, who, status, branch, tail) =>
+      `${mark} ${who.padEnd(30)} ${status.padEnd(9)} ${(branch || '-').padEnd(20)} ${tail}`.trimEnd();
     const lines = rows.map((a) =>
-      row(a.name === me.name ? '*' : ' ', a.name, a.status, a.role, a.branch, a.task ? `${a.task.id} ${a.task.title}` : ''));
+      row(a.name === me.name ? '*' : ' ', identity(a.name, a.role), a.status, a.branch, a.task ? `${a.task.id} ${a.task.title}` : ''));
     for (const l of live) {
-      if (l.name && !known.has(l.name)) lines.push(row(' ', l.name, l.agent_status, null, null, '(not yet on chatter)'));
-      if (!l.name) lines.push(row(' ', 'pane:' + l.pane_id, l.agent_status, null, null, `(unnamed ${l.agent || 'agent'})`));
+      if (l.name && !known.has(l.name)) lines.push(row(' ', `@${l.name}`, l.agent_status, null, '(not yet on chatter)'));
+      if (!l.name) lines.push(row(' ', 'pane:' + l.pane_id, l.agent_status, null, `(unnamed ${l.agent || 'agent'})`));
     }
-    console.log(lines.length ? row(' ', 'NAME', 'STATUS', 'ROLE', 'BRANCH', 'TASK') + '\n' + lines.join('\n') : 'no agents');
+    console.log(lines.length ? row(' ', 'AGENT', 'STATUS', 'BRANCH', 'TASK') + '\n' + lines.join('\n') : 'no agents');
     if (open.length) console.log(`\n${open.length} open question${open.length > 1 ? 's' : ''} (${open.map((q) => '#' + q.id).join(' ')}) — chatter questions`);
     const unread = chatUnreadCount(me.name);
     if (unread) console.log(`#chat: ${unread} unread (chatter chat)`);
@@ -766,6 +775,6 @@ module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent,
-  taskLabel, openQuestions, help, ensurePointerAndSymlink, flushAllRepos,
+  taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

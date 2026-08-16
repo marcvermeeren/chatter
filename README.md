@@ -158,7 +158,25 @@ failure with the exact fix. Exit code 1 when something's wrong.
 - The window shows everything, including agent↔agent DMs (dimmed). Reading
   history doesn't mark the latest as seen — only being at the bottom does.
 
-### Identity: names you already gave
+### The identity model
+
+Four fields, one job each — only the **handle** is addressable:
+
+- **Handle** (`@pi-helper`) — the Herdr agent name: slug format, unique
+  across the session, stable. Mentions, DMs, tasks, and handoffs all use it.
+  Shown everywhere as `@name`.
+- **Display label** (`Pi helper`) — the manual pane name, free text,
+  descriptive only. Rendered as `Pi helper · @pi-helper` in the roster and
+  completion (collapsed to just `@name` when absent or equal to the handle).
+- **Kind** (`pi`) — the harness, detected by Herdr, never guessed from text.
+- **Role** — simply the display label; what this agent is *for*.
+
+A new pane label seeds the handle on first contact (spaces become hyphens);
+changing the label later never changes the handle. Name collisions suffix
+`-2` with a visible note to the agent. Quoted mentions don't exist — handles
+are single copy-paste-able tokens by design.
+
+## Identity: names you already gave
 Registration is automatic on first contact. Auto-naming reads intent from
 existing names, most specific first: the **manual pane label** (`herdr pane
 rename` a pane to `codex-codereview` and that becomes the agent's name and
