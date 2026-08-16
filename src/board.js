@@ -7,7 +7,7 @@ const path = require('node:path');
 const { matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
 const { postToChat, teamAgents } = require('./team');
-const { taskLabel, buildBrief, spawnAgent, identity } = require('./commands');
+const { taskLabel, buildBrief, spawnAgent, setRole, identity } = require('./commands');
 const { sanitizeName } = require('./team');
 
 // Colored identity for TUI rows: dim display label, colored @handle.
@@ -192,13 +192,29 @@ function runSlash(body, d, ui, paint) {
   const [cmd, ...rest] = body.slice(1).split(/\s+/);
   if (cmd === 'clear') { ui.block = null; return; }
   if (cmd === 'spawn') {
-    // /spawn <name> [kind] [purpose...]
-    const [name, kind, ...purpose] = rest;
-    ui.block = { title: 'spawn', lines: [`starting ${name || '?'}${kind ? ` (${kind})` : ''}… (can take up to a minute)`] };
-    if (paint) paint();
-    const r = spawnAgent({ name: humanName(), human: true },
-      { name, kind: kind || null, purpose: purpose.join(' ') || null }, d);
-    ui.block = { title: r.ok ? 'spawned' : 'spawn failed', lines: r.lines };
+    // /spawn <name> [kind] [purpose...] [--tab] — plan first, Enter confirms.
+    const words = rest.filter((w) => w !== '--tab');
+    const tab = rest.includes('--tab');
+    const [name, kind, ...purpose] = words;
+    if (!name) { ui.block = { title: 'spawn', lines: ['usage: /spawn <name> [kind] [purpose...] [--tab]'] }; return; }
+    ui.pendingSpawn = { name, kind: kind || null, purpose: purpose.join(' ') || null, tab };
+    ui.block = {
+      title: 'add teammate — Enter creates, anything else cancels',
+      lines: [
+        `handle:      @${name}`,
+        `kind:        ${kind || '(inferred from this repo\'s agents)'}`,
+        `code setup:  ${tab ? 'THIS checkout, new tab (shared files!)' : `new worktree · branch agents/${name}`}`,
+        `purpose:     ${purpose.join(' ') || '(none — DM it later)'}`,
+      ],
+    };
+    return;
+  }
+  if (cmd === 'role') {
+    // /role @agent <display role...>
+    const [target, ...text] = rest;
+    if (!target || !text.length) { ui.block = { title: 'role', lines: ['usage: /role @agent <display role...>'] }; return; }
+    const r = setRole({ name: humanName(), human: true }, target, text.join(' '), d);
+    ui.block = { title: r.ok ? 'role set' : 'role failed', lines: r.lines };
     return;
   }
   if (cmd === 'brief' && rest[0] === 'share') {
@@ -216,7 +232,7 @@ function runSlash(body, d, ui, paint) {
     } catch (e) { ui.block = { title: 'brief', lines: [String(e.message)] }; }
     return;
   }
-  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/spawn <name> [kind] [purpose...]', '/clear'] };
+  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/spawn <name> [kind] [purpose...] [--tab]', '/role @agent <display role...>', '/clear'] };
 }
 
 // -------------------------------------------------------------------- board
@@ -342,6 +358,19 @@ function runView(render, { input = false } = {}) {
         case 'enter': {
           const body = ui.buffer.trim();
           ui.buffer = ''; ui.offset = 0;
+          if (ui.pendingSpawn) {
+            const plan = ui.pendingSpawn;
+            ui.pendingSpawn = null;
+            if (!body) { // empty Enter = confirm; anything typed = cancel
+              ui.block = { title: 'spawn', lines: [`creating @${plan.name}… (can take up to a minute)`] };
+              paint();
+              const r = spawnAgent({ name: humanName(), human: true }, plan, d);
+              ui.block = { title: r.ok ? 'teammate added' : 'spawn failed', lines: r.lines };
+              return paint();
+            }
+            ui.status = `${T.FAINT}spawn cancelled${T.RESET}`;
+            ui.block = null;
+          }
           if (body.startsWith('/')) {
             runSlash(body, d, ui, paint);
           } else if (body) {

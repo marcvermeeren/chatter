@@ -607,9 +607,9 @@ function cmdPurge(me, args) {
 // Thin wrapper over Herdr: new tab in this repo, start the agent, name it,
 // announce in #chat. Spawn only — no lifecycle management here.
 // Never exits the process (also runs inside the chat popup).
-function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
+function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = null, base = null }, d = db()) {
   const fail = (msg) => ({ ok: false, lines: [msg] });
-  if (!rawName) return fail('usage: spawn <name> --kind <codex|claude|pi|...> [--purpose "why it exists"]');
+  if (!rawName) return fail('usage: spawn <name> [--kind codex|claude|pi|...] [--purpose "why"] [--branch B] [--base REF] [--tab]');
   const name = sanitizeName(rawName);
   const taken = nameTaken(name);
   if (taken) return fail(`"${name}" is ${taken} — pick another name`);
@@ -627,21 +627,46 @@ function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
   if (!repoRoot || repoDbFile(repoRoot) !== dbFile(d)) {
     return fail('cannot determine this universe\'s repo — run one chatter command from a shell in it first');
   }
-  const tabArgs = ['tab', 'create', '--label', name, '--cwd', repoRoot, '--no-focus'];
-  if (process.env.HERDR_WORKSPACE_ID) tabArgs.push('--workspace', process.env.HERDR_WORKSPACE_ID);
-  const tab = herdr(tabArgs);
-  if (!tab.ok) return fail(`could not create a tab: ${tab.raw}`);
-  const pane = tab.json.result.root_pane.pane_id;
+  // Code setup: a fresh worktree by default — Chatter's own model says
+  // worktrees isolate code. --tab shares this checkout (explicit exception,
+  // fine for reviewers/helpers that don't write files).
+  let pane, cleanup, whereLine;
+  if (tab) {
+    const tabArgs = ['tab', 'create', '--label', name, '--cwd', repoRoot, '--no-focus'];
+    if (process.env.HERDR_WORKSPACE_ID) tabArgs.push('--workspace', process.env.HERDR_WORKSPACE_ID);
+    const t = herdr(tabArgs);
+    if (!t.ok) return fail(`could not create a tab: ${t.raw}`);
+    pane = t.json.result.root_pane.pane_id;
+    cleanup = () => herdr(['tab', 'close', t.json.result.tab.tab_id]);
+    whereLine = `same checkout, new tab (${pane}) — shared files, coordinate carefully`;
+  } else {
+    const wtBranch = branch || `agents/${name}`;
+    const wtArgs = ['worktree', 'create', '--cwd', repoRoot, '--branch', wtBranch, '--label', name, '--no-focus'];
+    if (base) wtArgs.push('--base', base);
+    const wt = herdr(wtArgs);
+    if (!wt.ok) return fail(`could not create a worktree: ${wt.raw}`);
+    const r = wt.json.result;
+    pane = (r.root_pane && r.root_pane.pane_id) || (r.workspace && r.workspace.root_pane && r.workspace.root_pane.pane_id);
+    if (!pane) return fail('worktree created but no pane returned — start the agent manually');
+    const wtPath = r.worktree && r.worktree.path;
+    cleanup = null; // never auto-remove a worktree — that's user data
+    whereLine = `new worktree on ${wtBranch}${wtPath ? ` (${wtPath})` : ''} — isolated checkout`;
+    lines.push(`cleanup when done: herdr worktree remove --path ${wtPath || '<worktree-path>'}`);
+  }
   const start = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '60000']);
   if (!start.ok) {
-    herdr(['tab', 'close', tab.json.result.tab.tab_id]);
-    return fail(`agent start failed: ${start.raw}`);
+    if (cleanup) cleanup();
+    return fail(`agent start failed: ${start.raw}${cleanup ? '' : ' (worktree left in place)'}`);
   }
   herdr(['pane', 'rename', pane, name]); // pane label = role, feeds the roster
   invalidateSessionAgents(); // roster changed — the cached list predates the spawn
-  logEvent(me.name, 'agent_spawned', name, { kind, by: me.name, purpose: purpose || null }, d);
+  // Boundary proof: the newcomer must verifiably belong to this universe
+  // (teamAgents only returns repo-verified agents, so presence = proof).
+  const verified = !!teamAgents(d).find((a) => a.name === name);
+  logEvent(me.name, 'agent_spawned', name, { kind, by: me.name, purpose: purpose || null, tab: !!tab }, d);
   postToChat(me, `spawned ${name} (${kind})${purpose ? `: ${purpose}` : ''}`, d, () => null);
-  lines.push(`${name} is up (${kind}, pane ${pane})`);
+  lines.unshift(`@${name} is up (${kind}) — ${whereLine}`);
+  lines.push(verified ? 'verified: joined this repo\'s universe' : 'warning: could not verify repo membership yet — its mail queues until it checks in');
   if (purpose) {
     const res = sendMessage(me.name, name, `you are "${name}". your purpose: ${purpose}`, 'system', null, d);
     lines.push(res.delivered ? 'purpose delivered to its session' : `purpose queued (${res.reason})`);
@@ -651,9 +676,49 @@ function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
   return { ok: true, lines };
 }
 
+
 function cmdSpawn(me, args) {
-  const opts = parseFlags(args, { kind: null, purpose: null });
-  const r = spawnAgent(me, { name: opts._[0], kind: opts.kind, purpose: opts.purpose });
+  const opts = parseFlags(args, { kind: null, purpose: null, tab: false, branch: null, base: null });
+  const r = spawnAgent(me, {
+    name: opts._[0], kind: opts.kind, purpose: opts.purpose,
+    tab: opts.tab, branch: opts.branch, base: opts.base,
+  });
+  for (const l of r.lines) console.log(l);
+  if (!r.ok) process.exit(1);
+}
+
+// ------------------------------------------------------------------- role
+
+// Roles are Chatter UX; the pane label is just where they live. Humans can
+// retitle anyone; an agent may only describe itself.
+function setRole(me, target, text, d = db()) {
+  const who = resolveRecipient(target.replace(/^@/, ''), { soft: true }, d);
+  if (!who) return { ok: false, lines: [`no agent "${target}" in this repo`] };
+  if (!me.human && who !== me.name) return { ok: false, lines: ['agents may only set their own role'] };
+  const row = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(who);
+  const live = teamAgents(d).find((a) => a.name === who);
+  const pane = (live && live.pane_id) || (row && row.pane_id);
+  const lines = [];
+  if (pane && live) {
+    const r = herdr(['pane', 'rename', pane, text]);
+    lines.push(r.ok ? `pane label updated` : `pane label not updated (${r.raw}) — roster updated anyway`);
+  } else {
+    lines.push(`${who} is offline — roster updated; pane label applies when it returns`);
+  }
+  const updated = d.prepare('UPDATE agents SET role = ? WHERE name = ?').run(text, who);
+  if (!updated.changes) { // live but not yet registered — seed a minimal row
+    d.prepare('INSERT INTO agents (name, pane_id, role, registered_at, last_seen_at) VALUES (?,?,?,?,?)')
+      .run(who, pane || null, text, now(), now());
+  }
+  lines.unshift(`${text} · @${who}`);
+  return { ok: true, lines };
+}
+
+function cmdRole(me, args) {
+  const target = args[0];
+  const text = args.slice(1).join(' ').trim();
+  if (!target || !text) die('usage: chatter role <agent> <display role...>   e.g. chatter role data-api "Data / API"');
+  const r = setRole(me, target, text);
   for (const l of r.lines) console.log(l);
   if (!r.ok) process.exit(1);
 }
@@ -684,7 +749,9 @@ function help() {
   chatter handoff show <id>             structured handoff payload (JSON)
   chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
   chatter stats                         team metrics (delivery latency, tasks, questions)
-  chatter spawn <name> --kind <k> [--purpose "..."]   start a teammate in a new tab
+  chatter spawn <name> [--kind k] [--purpose "..."] [--branch B] [--base REF] [--tab]
+                                        add a teammate in a NEW WORKTREE (--tab shares this checkout)
+  chatter role <agent> <display role...>   set a display role, e.g. "Data / API" · @data-api
   chatter data                          what chatter stores (per repo, sizes)
   chatter purge <repo>|--orphans|--all|--older-than 30d [--yes]   delete stored data
   chatter whoami
@@ -774,7 +841,7 @@ const hookOpenChat = () => openPane('chat');
 module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
-  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent,
+  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent, cmdRole, setRole,
   taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

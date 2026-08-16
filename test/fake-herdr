@@ -4,6 +4,9 @@
 echo "$*" >> "${FAKE_CALLS:?}"
 case "$1 $2" in
   "agent list")         cat "${FAKE_ROSTER:?}" ;;
+  "worktree create")    printf '{"result":{"worktree":{"path":"/fake/worktree"},"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\n' ;;
+  "tab create")         printf '{"result":{"tab":{"tab_id":"w8:t1"},"root_pane":{"pane_id":"w8:p1"}}}\n' ;;
+  "agent start")        printf '{"result":{"agent":{"name":"%s","agent_status":"idle"}}}\n' "$3" ;;
   "pane get")           printf '{"result":{"pane":{"label":null}}}\n' ;;
   "agent prompt")       printf '{"result":{"type":"agent_prompted"}}\n' ;;
   "agent rename")       printf '{"result":{"type":"agent_renamed"}}\n' ;;

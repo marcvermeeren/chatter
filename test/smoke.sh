@@ -134,6 +134,30 @@ $CHF post "@everyone hello" >/dev/null 2>&1
 grep -c "agent prompt" "$FAKE_CALLS" | grep -qx "1" && grep -q "agent prompt w1:p1" "$FAKE_CALLS" \
   && ok "@everyone reaches only this repo's team" || fail "@everyone crossed the repo boundary"
 $CHF brief 1h 2>/dev/null | grep -q "agents: 1 idle" && ok "brief counts this repo's team only" || fail "brief counts this repo's team only"
+echo "# spawn v2: worktree default, --tab explicit"
+: > "$FAKE_CALLS"
+OUT=$($CHF spawn helper2 --kind pi 2>&1)
+grep -q "worktree create --cwd" "$FAKE_CALLS" && grep -q "branch agents/helper2" "$FAKE_CALLS" \
+  && ok "spawn creates a worktree on agents/<handle>" || fail "spawn creates a worktree"
+grep -q "tab create" "$FAKE_CALLS" && fail "worktree spawn also made a tab" || ok "no tab for worktree spawn"
+grep -q "agent start helper2" "$FAKE_CALLS" && ok "agent started in worktree pane" || fail "agent started in worktree pane"
+echo "$OUT" | grep -q "new worktree" && ok "output names the worktree setup" || fail "output names the worktree setup"
+: > "$FAKE_CALLS"
+$CHF spawn helper3 --kind pi --tab >/dev/null 2>&1
+grep -q "tab create" "$FAKE_CALLS" && ok "--tab uses same-checkout tab" || fail "--tab uses same-checkout tab"
+grep -q "worktree create" "$FAKE_CALLS" && fail "--tab still made a worktree" || ok "--tab made no worktree"
+
+echo "# role: display label via chatter"
+: > "$FAKE_CALLS"
+$CHF role alpha "Data / API" >/dev/null 2>&1
+grep -q "pane rename w1:p1 Data / API" "$FAKE_CALLS" && ok "role renames the pane through herdr" || fail "role renames the pane"
+$CHF agents | grep -q "Data / API · @alpha" && ok "roster shows display · @handle" || fail "roster shows display · @handle"
+# 'moved' is registered in repo A, so it resolves — the permission check must fire.
+ROLE_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$ROOT/bin/chatter.js" role moved "Sneaky retitle" 2>&1)
+echo "$ROLE_OUT" | grep -q "only set their own" && ok "agent cannot retitle a teammate" || fail "agent retitle not blocked: $ROLE_OUT"
+# Cross-repo target refused even earlier, by the boundary itself.
+ROLE_OUT2=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$ROOT/bin/chatter.js" role beta "x" 2>&1)
+echo "$ROLE_OUT2" | grep -q "no agent" && ok "cross-repo retitle blocked by the boundary" || fail "cross-repo retitle: $ROLE_OUT2"
 unset FAKE_CALLS FAKE_ROSTER
 
 echo "# human-only gates"

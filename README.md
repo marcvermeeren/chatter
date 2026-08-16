@@ -261,14 +261,36 @@ chatter whoami · chatter iam <name> · chatter help
 
 ## Spawning teammates
 
-`chatter spawn reviewer --kind codex --purpose "review every handoff"` (or
-`/spawn reviewer codex review every handoff` in the chat window) opens a new
-tab in the current workspace, starts the agent there via Herdr, names it
-(the name is its role), announces it in #chat, and DMs it its purpose — which
-doubles as its chatter onboarding. Spawn only: no kill/restart/lifecycle
-management, no layout rearranging, always announced (agents may spawn too —
-whether they *hire* is part of the experiment). Freshly spawned agents may
+Chatter orchestrates Herdr; it never reimplements it:
+
+| Concern | Owner |
+|---|---|
+| Worktree / workspace / pane creation | Herdr |
+| Starting the agent process | Herdr |
+| Handle, role, purpose, team membership | Chatter |
+| Tasks, briefing, announcements | Chatter |
+| Combining it into one safe flow | Chatter |
+
+`chatter spawn data-api --kind codex --purpose "own the API contract"`
+creates a **new worktree** (branch `agents/data-api`, `--branch`/`--base`
+overridable), starts the agent in it via Herdr, labels the pane, announces
+the teammate in #chat, DMs its purpose (which doubles as chatter
+onboarding), and **verifies the newcomer actually joined this repo's
+universe**. Sharing the current checkout is an explicit exception —
+`--tab` — because shared files between coding agents is exactly what
+worktrees exist to prevent. In the chat window, `/spawn` shows the full
+plan first (handle, kind, code setup, purpose); an empty **Enter creates**,
+typing anything cancels.
+
+Spawn only: no kill/restart/lifecycle management (the output prints the
+`herdr worktree remove` cleanup line for later). Agents may spawn too —
+whether they *hire* is part of the experiment. Freshly spawned agents may
 sit `blocked` on a first-run trust dialog until you click through once.
+
+`chatter role <agent> "Data / API"` (or `/role @agent …`) sets the display
+role — chatter updates the Herdr pane label and its roster together, so you
+never touch pane plumbing. Humans can retitle anyone; agents only describe
+themselves. Handles never change this way.
 
 ## Your data
 
