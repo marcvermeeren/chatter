@@ -14,12 +14,19 @@ const T = require('./tui');
 // ------------------------------------------------------------ repo selection
 
 function initialDbFile() {
+  // The focused workspace's repo wins — and if its universe doesn't exist
+  // yet, create it (empty) rather than silently showing another repo's chat.
   try {
     const ctx = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || '{}');
     const cwd = (ctx.worktree && ctx.worktree.checkout_path) || ctx.workspace_cwd || ctx.focused_pane_cwd;
     if (cwd) {
       const g = gitInfo(cwd);
-      if (g.repoRoot && fs.existsSync(repoDbFile(g.repoRoot))) return repoDbFile(g.repoRoot);
+      if (g.repoRoot) {
+        const file = repoDbFile(g.repoRoot);
+        openDbFile(file).prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
+          ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
+        return file;
+      }
     }
   } catch { /* fall through */ }
   const g = gitInfo(process.cwd());
