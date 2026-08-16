@@ -101,6 +101,48 @@ $CH purge --orphans --yes | grep -q "deleted" && ok "orphan purged" || fail "orp
 $CH data | grep -q "ORPHAN" && fail "orphan still listed" || ok "orphan gone from data"
 $CH purge --older-than 0h --yes >/dev/null 2>&1 && ok "older-than trim runs" || fail "older-than trim runs"
 
+echo "# behavioral isolation (fake herdr: agents live in two repos)"
+export FAKE_CALLS="$TMP/herdr-calls.log"
+export FAKE_ROSTER="$TMP/roster.json"
+: > "$FAKE_CALLS"
+REPO_B2="$TMP/repo-b"   # created above, has its own universe
+cat > "$FAKE_ROSTER" <<EOF
+{"result":{"agents":[
+  {"name":"alpha","pane_id":"w1:p1","agent_status":"idle","agent":"claude","workspace_id":"w1","cwd":"$REPO"},
+  {"name":"beta","pane_id":"w1:p2","agent_status":"idle","agent":"claude","workspace_id":"w1","cwd":"$REPO_B2"},
+  {"name":"moved","pane_id":"w1:p3","agent_status":"idle","agent":"pi","workspace_id":"w1","cwd":"$REPO_B2"}
+]}}
+EOF
+# 'moved' registered in repo A historically, but its pane now works in repo B.
+ADB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/repo-a-*/chatter.db)
+sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,cwd,repo_root,registered_at,last_seen_at) VALUES ('moved','w1:p3','$REPO','$REPO','x','x')"
+cd "$REPO"
+CHF="env HERDR_BIN_PATH=$ROOT/test/fake-herdr node --no-warnings $ROOT/bin/chatter.js"
+OUT=$($CHF agents)
+echo "$OUT" | grep -q "alpha" && ok "roster shows in-repo live agent" || fail "roster shows in-repo live agent"
+echo "$OUT" | grep -q "beta" && fail "roster leaks other repo's agent" || ok "roster excludes other repo's agent"
+echo "$OUT" | grep "moved" | grep -q "offline" && ok "moved-away agent shows offline, not live" || fail "moved-away agent shows offline"
+$CHF send beta "hi" >/dev/null 2>&1 && fail "send to other-repo agent accepted" || ok "send to other-repo agent refused"
+: > "$FAKE_CALLS"
+$CHF send moved "hi" 2>/dev/null | grep -q queued && ok "send to moved-away agent queues" || fail "send to moved-away agent queues"
+grep -q "agent prompt" "$FAKE_CALLS" && fail "H1 REGRESSION: injected into moved-away agent" || ok "no injection to moved-away agent (H1)"
+: > "$FAKE_CALLS"
+$CHF send alpha "hi" 2>/dev/null | grep -q delivered && ok "send to in-repo agent delivers" || fail "send to in-repo agent delivers"
+grep -q "agent prompt w1:p1" "$FAKE_CALLS" && ok "prompt went to alpha's pane" || fail "prompt went to alpha's pane"
+: > "$FAKE_CALLS"
+$CHF post "@everyone hello" >/dev/null 2>&1
+grep -c "agent prompt" "$FAKE_CALLS" | grep -qx "1" && grep -q "agent prompt w1:p1" "$FAKE_CALLS" \
+  && ok "@everyone reaches only this repo's team" || fail "@everyone crossed the repo boundary"
+$CHF brief 1h 2>/dev/null | grep -q "agents: 1 idle" && ok "brief counts this repo's team only" || fail "brief counts this repo's team only"
+unset FAKE_CALLS FAKE_ROSTER
+
+echo "# human-only gates"
+HP_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$ROOT/bin/chatter.js" purge --all --yes 2>&1)
+echo "$HP_OUT" | grep -q "human-only" && ok "agent cannot purge" || fail "agent purge not blocked: $HP_OUT"
+HI_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$ROOT/bin/chatter.js" iam evil 2>&1)
+echo "$HI_OUT" | grep -q "human-only" && ok "agent cannot change human identity" || fail "agent iam not blocked: $HI_OUT"
+ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db >/dev/null 2>&1 && ok "universes survived blocked purge" || fail "universes survived blocked purge"
+
 echo "# boundary lint: repo-scoped code must not touch the session-wide roster"
 if grep -n 'sessionAgents' "$ROOT/src/commands.js" "$ROOT/src/board.js" "$ROOT/bin/chatter.js" >/dev/null 2>&1; then
   fail "sessionAgents leaked into repo-scoped code (commands/board/bin)"

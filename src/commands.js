@@ -131,7 +131,8 @@ function cmdWhoami(me) {
 }
 
 // Set the human's chat name (stored in the plugin config dir, global).
-function cmdIam(_me, args) {
+function cmdIam(me, args) {
+  humanOnly(me, 'chatter iam');
   const fsx = require('node:fs');
   if (!args[0]) { console.log(`you are "${humanName()}" — change with: chatter iam <name>`); return; }
   const name = args[0].toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32);
@@ -534,7 +535,14 @@ function repoUniverses() {
   });
 }
 
-function cmdData() {
+// Global administration is human-only: a confused or prompt-injected agent
+// must stay contained to its repo (honor-system tier, like the repo boundary).
+function humanOnly(me, what) {
+  if (!me.human) die(`${what} is human-only — agents administer nothing outside their repo`);
+}
+
+function cmdData(me) {
+  humanOnly(me, 'chatter data');
   const rows = repoUniverses();
   emit(rows, () => {
     if (!rows.length) { console.log('no chatter data stored yet'); return; }
@@ -550,7 +558,8 @@ function cmdData() {
   });
 }
 
-function cmdPurge(_me, args) {
+function cmdPurge(me, args) {
+  humanOnly(me, 'chatter purge');
   const opts = parseFlags(args, { yes: false, orphans: false, all: false, 'older-than': null });
   const rows = repoUniverses();
   let targets = [];

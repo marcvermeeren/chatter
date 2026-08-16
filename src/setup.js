@@ -158,7 +158,8 @@ const defaultName = () => {
   return n || 'user';
 };
 
-function cmdSetup(_me, args) {
+function cmdSetup(me, args) {
+  if (!me.human) die('chatter setup is human-only');
   const opts = parseFlags(args, { yes: false, name: null, key: 'prefix+alt+c', 'no-toasts': false, 'no-keybind': false });
   const width = process.stdout.columns || 100;
   console.log(logoLines(width).join('\n'));

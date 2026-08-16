@@ -44,11 +44,15 @@ function humanName() {
   return 'user';
 }
 
+// Canonicalize so path comparisons (repo-boundary checks) never break on
+// symlinks — SQLite reports resolved paths, e.g. /private/var vs /var on macOS.
+const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+
 function stateRoot() {
-  if (process.env.HERDR_PLUGIN_STATE_DIR) return process.env.HERDR_PLUGIN_STATE_DIR;
+  if (process.env.HERDR_PLUGIN_STATE_DIR) return real(process.env.HERDR_PLUGIN_STATE_DIR);
   // Herdr's layout on Unix (verified 0.8.0): ~/.local/state/herdr/plugins/<id>
   const conventional = path.join(os.homedir(), '.local', 'state', 'herdr', 'plugins', PLUGIN_ID);
-  if (fs.existsSync(conventional)) return conventional;
+  if (fs.existsSync(conventional)) return real(conventional);
   // Fall back to the pointer the startup hook writes into the config dir.
   const cfg = spawnSync(HERDR, ['plugin', 'config-dir', PLUGIN_ID], { encoding: 'utf8' });
   const cfgDir = (cfg.stdout || '').trim();
@@ -56,12 +60,12 @@ function stateRoot() {
     const pointer = path.join(cfgDir, 'state-dir');
     if (fs.existsSync(pointer)) {
       const p = fs.readFileSync(pointer, 'utf8').trim();
-      if (p && fs.existsSync(p)) return p;
+      if (p && fs.existsSync(p)) return real(p);
     }
   }
   const fallback = path.join(os.homedir(), '.local', 'state', 'herdr-chatter');
   fs.mkdirSync(fallback, { recursive: true });
-  return fallback;
+  return real(fallback);
 }
 
 const sanitizeKey = (s) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 40) || 'repo';

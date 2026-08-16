@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake herdr for behavioral tests: serves a canned roster ($FAKE_ROSTER file)
+# and records every invocation ($FAKE_CALLS file).
+echo "$*" >> "${FAKE_CALLS:?}"
+case "$1 $2" in
+  "agent list")         cat "${FAKE_ROSTER:?}" ;;
+  "pane get")           printf '{"result":{"pane":{"label":null}}}\n' ;;
+  "agent prompt")       printf '{"result":{"type":"agent_prompted"}}\n' ;;
+  "agent rename")       printf '{"result":{"type":"agent_renamed"}}\n' ;;
+  "notification show")  printf '{"result":{"shown":true,"type":"notification_show"}}\n' ;;
+  "plugin config-dir")  printf '%s\n' "${HERDR_PLUGIN_CONFIG_DIR:-/tmp}" ;;
+  *)                    printf '{"result":{}}\n' ;;
+esac
+exit 0

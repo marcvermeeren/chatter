@@ -29,9 +29,12 @@ function initialDbFile() {
       }
     }
   } catch { /* fall through */ }
+  // CLI path: the caller's own shell cwd is legitimate context.
   const g = gitInfo(process.cwd());
   if (g.repoRoot && fs.existsSync(repoDbFile(g.repoRoot))) return repoDbFile(g.repoRoot);
-  return listRepoDbFiles()[0] || null;
+  // Fail closed: never silently show some other repo's universe —
+  // the human picks explicitly instead.
+  return null;
 }
 
 const repoLabel = (file) => path.basename(path.dirname(file)).replace(/-[0-9a-f]{8}$/, '');
@@ -259,11 +262,21 @@ function openPointerFor(d) {
 function runView(render, { input = false } = {}) {
   let files = listRepoDbFiles();
   let file = initialDbFile();
-  if (!file) { console.log('no chatter data yet — run chatter inside a git repo first'); process.exit(0); }
-  let d = openDbFile(file);
-  const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: openPointerFor(d), lastMaxId: 0, scrollBaseId: 0 };
+  let d = file ? openDbFile(file) : null;
+  const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0 };
+  const pickerScreen = () => [
+    ` ${T.BOLD}chatter${T.RESET}`,
+    '',
+    ` ${T.FAINT}no repository context — this workspace isn't a git repo (or has no focused repo).${T.RESET}`,
+    files.length ? ` ${T.FAINT}pick a stored universe:${T.RESET}` : ` ${T.FAINT}no stored universes yet — run a chatter command inside a git repo first.${T.RESET}`,
+    '',
+    ...files.map((f, i) => `   ${T.BOLD}${i + 1}${T.RESET}  #${repoLabel(f)}`),
+    '',
+    ` ${T.FAINT}1-9 opens · Esc closes${T.RESET}`,
+  ];
   const paint = () => {
     files = listRepoDbFiles();
+    if (!d) { painter(pickerScreen()); return; }
     if (input) {
       const set = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
       for (const a of teamAgents(d, { fresh: true })) if (a.name) set.add(a.name);
@@ -283,6 +296,17 @@ function runView(render, { input = false } = {}) {
     process.stdin.on('data', (b) => {
       const key = T.decodeKey(b.toString());
       if (key.type === 'esc' || key.type === 'close') process.exit(0);
+      // No repo selected yet: picker mode for every view (explicit choice only).
+      if (!d) {
+        if (key.type === 'text') {
+          if (key.text === 'q') process.exit(0);
+          const n = parseInt(key.text, 10);
+          if (n >= 1 && n <= files.length) {
+            file = files[n - 1]; d = openDbFile(file); ui.openPointer = openPointerFor(d); paint();
+          }
+        }
+        return;
+      }
       const page = Math.max(3, (process.stdout.rows || 30) - 6);
       if (!input) {
         if (key.type === 'text') {

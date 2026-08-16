@@ -20,13 +20,14 @@ function liveAgentInRepo(agent, d) {
   return _inRepoCache.get(key);
 }
 
-// THE chokepoint for repo-scoped code: live agents that verifiably belong to
-// this repo — registered pane, or cwd inside the repo. Everything outside
-// this module must see live agents only through here (enforced by the
-// boundary lint in test/smoke.sh).
+// THE chokepoint for repo-scoped code: live agents whose CURRENT working
+// directory verifiably belongs to this repo. Registration is identity, not
+// membership — "registered here once" never means "belongs here now", so an
+// agent that moved to another repo drops out (fail closed; its mail queues).
+// Everything outside this module must see live agents only through here
+// (enforced by the boundary lint + behavioral tests in test/).
 function teamAgents(d = db(), { fresh = false } = {}) {
-  const regPanes = new Set(d.prepare('SELECT pane_id FROM agents').all().map((r) => r.pane_id));
-  return sessionAgents({ fresh }).filter((a) => regPanes.has(a.pane_id) || liveAgentInRepo(a, d));
+  return sessionAgents({ fresh }).filter((a) => liveAgentInRepo(a, d));
 }
 
 // ---------------------------------------------------------------- identity
@@ -92,8 +93,8 @@ function editDistance(a, b) {
   return m[a.length][b.length];
 }
 
-function rosterNames() {
-  return db().prepare('SELECT name FROM agents').all().map((r) => r.name);
+function rosterNames(d = db()) {
+  return d.prepare('SELECT name FROM agents').all().map((r) => r.name);
 }
 
 // Is a name already claimed anywhere — live agents or any repo's roster?
@@ -111,12 +112,12 @@ function nameTaken(name) {
 // Resolve a user-typed recipient against this repo's roster (plus live agents
 // verifiably in this repo). Exact > unique prefix > refuse-with-suggestions.
 // { allowUnknown: true } queues for a not-yet-existing exact name (--queue).
-function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
-  const candidates = new Set([...rosterNames(), humanName()]);
+function resolveRecipient(input, { allowUnknown = false, soft = false } = {}, d = db()) {
+  const candidates = new Set([...rosterNames(d), humanName()]);
   if (candidates.has(input)) return input; // hot path: registered exact match
   // Live named agents not yet registered join the pool only when they
   // verifiably belong to this repo (per-repo isolation).
-  for (const a of teamAgents()) if (a.name) candidates.add(a.name);
+  for (const a of teamAgents(d)) if (a.name) candidates.add(a.name);
   if (candidates.has(input)) return input;
   const lower = input.toLowerCase();
   const prefix = [...candidates].filter((n) => n.toLowerCase().startsWith(lower));
@@ -137,19 +138,18 @@ function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
 const DELIVERABLE = new Set(['idle', 'done', 'working', 'unknown']);
 
 function resolveTarget(name, live, d = db()) {
-  const registered = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
+  // Fail closed: injection requires the target's CURRENT repo to verify —
+  // historical registration alone is never enough (an agent that moved to
+  // another repo must not receive this repo's messages there).
   const byName = live.find((x) => x.name === name);
-  // Defense in depth for the repo boundary: only inject when the live agent
-  // is the pane we registered, or verifiably works in this repo (Herdr frees
-  // names on exit, so a name can be reused by an agent in another repo).
-  if (byName && ((registered && registered.pane_id === byName.pane_id) || liveAgentInRepo(byName, d))) {
+  if (byName && liveAgentInRepo(byName, d)) {
     return { paneId: byName.pane_id, status: byName.agent_status };
   }
   // Last-known pane, but only if it isn't now occupied by a differently-named
   // agent AND still works in this repo (a pane can be cd'd elsewhere).
-  const row = registered;
-  if (row) {
-    const atPane = live.find((x) => x.pane_id === row.pane_id);
+  const registered = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
+  if (registered) {
+    const atPane = live.find((x) => x.pane_id === registered.pane_id);
     if (atPane && !atPane.name && liveAgentInRepo(atPane, d)) {
       return { paneId: atPane.pane_id, status: atPane.agent_status };
     }
@@ -242,7 +242,10 @@ function sendMessage(from, to, body, kind = 'chat', refId = null, d = db()) {
 
 // Post to a repo's group chat and push any mentions. `resolveMention` maps a
 // raw @name to a recipient (or null); callers choose how strict that is.
-function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient(n, { soft: true })) {
+// Safe by construction: the default mention resolver binds to the SAME
+// handle `d`, never to the process-cwd universe.
+function postToChat(me, body, d = db(), resolveMention = null) {
+  const resolve = resolveMention || ((n) => resolveRecipient(n, { soft: true }, d));
   const postId = d.prepare(
     "INSERT INTO messages (from_agent, to_agent, body, kind, created_at, delivered_at) VALUES (?,'#chat',?,'post',?,?)"
   ).run(me.name, body, now(), now()).lastInsertRowid;
@@ -251,7 +254,7 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
   let everyone = false;
   for (const m of body.matchAll(/@([a-z0-9_-]+)/g)) {
     if (m[1] === 'everyone') { everyone = true; continue; }
-    const hit = resolveMention(m[1]);
+    const hit = resolve(m[1]);
     if (hit && hit !== me.name) mentioned.add(hit);
     else if (!hit) warnings.push(`mention @${m[1]} matches no agent in this repo — not pushed`);
   }
@@ -259,7 +262,7 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
     if (me.human) {
       for (const a of teamAgents(d)) {
         if (!a.name || a.name === me.name) continue;
-        const hit = resolveMention(a.name);
+        const hit = resolve(a.name);
         if (hit) mentioned.add(hit);
       }
     } else {
