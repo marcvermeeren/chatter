@@ -264,11 +264,20 @@ function runView(render, { input = false } = {}) {
   if (!file) { console.log('no chatter data yet — run chatter inside a git repo first'); process.exit(0); }
   let d = openDbFile(file);
   const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: openPointerFor(d), lastMaxId: 0, scrollBaseId: 0 };
+  const inRepoCache = new Map(); // "dbfile|cwd" -> belongs to the viewed repo
   const paint = () => {
     files = listRepoDbFiles();
     if (input) {
       const set = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
-      for (const a of liveAgents({ fresh: true })) if (a.name) set.add(a.name);
+      // Live-but-unregistered names only when they verifiably live in THIS
+      // repo — suggesting names the resolver would refuse is worse than
+      // omitting them.
+      for (const a of liveAgents({ fresh: true })) {
+        if (!a.name || set.has(a.name) || !a.cwd) continue;
+        const key = `${file}|${a.cwd}`;
+        if (!inRepoCache.has(key)) inRepoCache.set(key, liveAgentInRepo(a, d));
+        if (inRepoCache.get(key)) set.add(a.name);
+      }
       ui.names = [...set].sort();
     }
     painter(render(d, file, files, ui));
