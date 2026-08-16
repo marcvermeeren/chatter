@@ -4,9 +4,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { PLUGIN_ID, herdr, liveAgents, matchLive } = require('./herdr');
+const { PLUGIN_ID, herdr, liveAgents, invalidateLiveAgents, matchLive } = require('./herdr');
 const { db, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles, logEvent } = require('./db');
-const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount } = require('./team');
+const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount, nameTaken, sanitizeName } = require('./team');
 const { configRoot, humanName } = require('./db');
 const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
 const { clean } = require('./tui');
@@ -513,6 +513,134 @@ function cmdBrief(me, args) {
   });
 }
 
+// ------------------------------------------------------------- data control
+
+// Everything chatter stores is local SQLite under the plugin state dir.
+// These commands make that visible and deletable.
+function repoUniverses() {
+  return listRepoDbFiles().map((f) => {
+    const d = openDbFile(f);
+    const count = (t) => d.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get().n;
+    const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
+    const root = mark ? { repo_root: mark.value }
+      : d.prepare('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1').get();
+    const last = d.prepare('SELECT MAX(created_at) AS t FROM messages').get().t
+      || d.prepare('SELECT MAX(at) AS t FROM events').get().t;
+    let bytes = 0;
+    for (const suffix of ['', '-wal', '-shm']) { try { bytes += fs.statSync(f + suffix).size; } catch { /* absent */ } }
+    return {
+      key: path.basename(path.dirname(f)),
+      dir: path.dirname(f),
+      repo_root: root ? root.repo_root : null,
+      orphan: !!(root && root.repo_root && !fs.existsSync(root.repo_root)),
+      messages: count('messages'), notes: count('notes'), tasks: count('tasks'), events: count('events'),
+      last_activity: last || null,
+      bytes,
+    };
+  });
+}
+
+function cmdData() {
+  const rows = repoUniverses();
+  emit(rows, () => {
+    if (!rows.length) { console.log('no chatter data stored yet'); return; }
+    console.log('chatter stores everything locally in per-repo SQLite files:\n');
+    for (const r of rows) {
+      const tag = r.orphan ? '  (ORPHAN — repo no longer exists)' : '';
+      console.log(`${r.key}${tag}`);
+      console.log(`   repo: ${r.repo_root || 'unknown'}`);
+      console.log(`   ${r.messages} messages, ${r.notes} notes, ${r.tasks} tasks, ${r.events} events · ${(r.bytes / 1024).toFixed(0)} KB · last activity ${r.last_activity || '-'}`);
+      console.log(`   file: ${r.dir}/chatter.db`);
+    }
+    console.log(`\ndelete: chatter purge <name> | --orphans | --all  (dry run without --yes)`);
+  });
+}
+
+function cmdPurge(_me, args) {
+  const opts = parseFlags(args, { yes: false, orphans: false, all: false, 'older-than': null });
+  const rows = repoUniverses();
+  let targets = [];
+  if (opts.all) targets = rows;
+  else if (opts.orphans) targets = rows.filter((r) => r.orphan);
+  else if (opts['older-than']) {
+    const m = opts['older-than'].match(/^(\d+)([dh])$/);
+    if (!m) die('usage: chatter purge --older-than <Nd|Nh> [--yes]  (trims old messages+events in the current repo)');
+    const cutoff = new Date(Date.now() - parseInt(m[1], 10) * (m[2] === 'd' ? 86400e3 : 3600e3))
+      .toISOString().replace('T', ' ').slice(0, 19);
+    const d = db();
+    const nm = d.prepare('SELECT COUNT(*) AS n FROM messages WHERE created_at < ?').get(cutoff).n;
+    const ne = d.prepare('SELECT COUNT(*) AS n FROM events WHERE at < ?').get(cutoff).n;
+    if (!opts.yes) { console.log(`would trim ${nm} messages and ${ne} events older than ${cutoff} — add --yes to execute`); return; }
+    d.prepare('DELETE FROM messages WHERE created_at < ?').run(cutoff);
+    d.prepare('DELETE FROM events WHERE at < ?').run(cutoff);
+    console.log(`trimmed ${nm} messages and ${ne} events`);
+    return;
+  } else if (opts._[0]) {
+    targets = rows.filter((r) => r.key === opts._[0] || r.key.startsWith(opts._[0] + '-') || r.key.replace(/-[0-9a-f]{8}$/, '') === opts._[0]);
+    if (!targets.length) die(`no stored universe matches "${opts._[0]}" — see: chatter data`);
+  } else {
+    die('usage: chatter purge <repo-name> | --orphans | --all | --older-than 30d   (dry run; add --yes to execute)');
+  }
+  if (!targets.length) { console.log('nothing to purge'); return; }
+  for (const t of targets) {
+    const line = `${t.key}: ${t.messages} messages, ${t.notes} notes, ${t.tasks} tasks, ${t.events} events`;
+    if (opts.yes) { fs.rmSync(t.dir, { recursive: true, force: true }); console.log(`deleted ${line}`); }
+    else console.log(`would delete ${line}`);
+  }
+  if (!opts.yes) console.log('\ndry run — add --yes to execute');
+}
+
+// ------------------------------------------------------------------- spawn
+
+// Thin wrapper over Herdr: new tab in this repo, start the agent, name it,
+// announce in #chat. Spawn only — no lifecycle management here.
+// Never exits the process (also runs inside the chat popup).
+function spawnAgent(me, { name: rawName, kind, purpose }, d = db()) {
+  const fail = (msg) => ({ ok: false, lines: [msg] });
+  if (!rawName) return fail('usage: spawn <name> --kind <codex|claude|pi|...> [--purpose "why it exists"]');
+  const name = sanitizeName(rawName);
+  const taken = nameTaken(name);
+  if (taken) return fail(`"${name}" is ${taken} — pick another name`);
+  const lines = [];
+  if (!kind) {
+    const kinds = liveAgents().map((a) => a.agent).filter(Boolean);
+    kind = kinds.sort((a, b) => kinds.filter((k) => k === b).length - kinds.filter((k) => k === a).length)[0];
+    if (!kind) return fail('no --kind given and no live agents to infer one from (run: herdr agent  for installed kinds)');
+    lines.push(`no kind given — using ${kind} (majority of live agents)`);
+  }
+  const g = gitInfo();
+  if (!g.toplevel) return fail('spawn runs inside a git repo (the agent joins this repo\'s team)');
+  const tabArgs = ['tab', 'create', '--label', name, '--cwd', g.toplevel, '--no-focus'];
+  if (process.env.HERDR_WORKSPACE_ID) tabArgs.push('--workspace', process.env.HERDR_WORKSPACE_ID);
+  const tab = herdr(tabArgs);
+  if (!tab.ok) return fail(`could not create a tab: ${tab.raw}`);
+  const pane = tab.json.result.root_pane.pane_id;
+  const start = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '60000']);
+  if (!start.ok) {
+    herdr(['tab', 'close', tab.json.result.tab.tab_id]);
+    return fail(`agent start failed: ${start.raw}`);
+  }
+  herdr(['pane', 'rename', pane, name]); // pane label = role, feeds the roster
+  invalidateLiveAgents(); // roster changed — the cached list predates the spawn
+  logEvent(me.name, 'agent_spawned', name, { kind, by: me.name, purpose: purpose || null }, d);
+  postToChat(me, `spawned ${name} (${kind})${purpose ? `: ${purpose}` : ''}`, d, () => null);
+  lines.push(`${name} is up (${kind}, pane ${pane})`);
+  if (purpose) {
+    const res = sendMessage(me.name, name, `you are "${name}". your purpose: ${purpose}`, 'system', null, d);
+    lines.push(res.delivered ? 'purpose delivered to its session' : `purpose queued (${res.reason})`);
+  }
+  const status = start.json && start.json.result.agent ? start.json.result.agent.agent_status : 'unknown';
+  if (status === 'blocked') lines.push('it is showing a startup dialog (trust/permissions) — click through it once');
+  return { ok: true, lines };
+}
+
+function cmdSpawn(me, args) {
+  const opts = parseFlags(args, { kind: null, purpose: null });
+  const r = spawnAgent(me, { name: opts._[0], kind: opts.kind, purpose: opts.purpose });
+  for (const l of r.lines) console.log(l);
+  if (!r.ok) process.exit(1);
+}
+
 // -------------------------------------------------------------------- help
 
 function help() {
@@ -539,6 +667,9 @@ function help() {
   chatter handoff show <id>             structured handoff payload (JSON)
   chatter log [--grep PAT] [--task TASK-n] [--limit N] [--all]
   chatter stats                         team metrics (delivery latency, tasks, questions)
+  chatter spawn <name> --kind <k> [--purpose "..."]   start a teammate in a new tab
+  chatter data                          what chatter stores (per repo, sizes)
+  chatter purge <repo>|--orphans|--all|--older-than 30d [--yes]   delete stored data
   chatter whoami
   chatter iam <name>                    set the human's chat name (human only)
 
@@ -626,7 +757,7 @@ const hookOpenChat = () => openPane('chat');
 module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
-  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief,
+  cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent,
   taskLabel, openQuestions, help, ensurePointerAndSymlink, flushAllRepos,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
 };

@@ -5,7 +5,7 @@
 
 const path = require('node:path');
 const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
-const { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent } = require('./db');
+const { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } = require('./db');
 const { die } = require('./util');
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -78,6 +78,17 @@ function editDistance(a, b) {
 
 function rosterNames() {
   return db().prepare('SELECT name FROM agents').all().map((r) => r.name);
+}
+
+// Is a name already claimed anywhere — live agents or any repo's roster?
+function nameTaken(name) {
+  if (liveAgents().some((a) => a.name === name)) return 'a live agent';
+  for (const f of listRepoDbFiles()) {
+    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
+      return `a registered agent in ${path.basename(path.dirname(f))}`;
+    }
+  }
+  return null;
 }
 
 // Resolve a user-typed recipient against this repo's roster (plus live agents
@@ -250,6 +261,6 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
 }
 
 module.exports = {
-  sanitizeName, whoami, resolveRecipient, resolveTarget, liveAgentInRepo,
+  sanitizeName, whoami, resolveRecipient, resolveTarget, liveAgentInRepo, nameTaken,
   formatDelivery, tryDeliver, flushPending, sendMessage, postToChat, chatUnreadCount,
 };

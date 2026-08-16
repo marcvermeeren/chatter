@@ -133,6 +133,10 @@ function db() {
   const g = gitInfo();
   if (!g.repoRoot) die('chatter is per-repo — run it inside a git repository');
   _db = openDbFile(repoDbFile(g.repoRoot));
+  // Record which repo this universe belongs to (orphan detection in
+  // `chatter data` — agent rows alone miss human-only universes).
+  _db.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
+    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
   return _db;
 }
 

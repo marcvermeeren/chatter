@@ -78,15 +78,7 @@ function editHerdrConfig({ toasts, key }) {
 
 // ------------------------------------------------------------------- doctor
 
-function nameTaken(name) {
-  if (liveAgents().some((a) => a.name === name)) return 'a live agent';
-  for (const f of listRepoDbFiles()) {
-    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
-      return `a registered agent in ${path.basename(path.dirname(f))}`;
-    }
-  }
-  return null;
-}
+const { nameTaken } = require('./team');
 
 function doctorChecks() {
   const checks = [];

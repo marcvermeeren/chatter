@@ -7,7 +7,7 @@ const path = require('node:path');
 const { liveAgents, matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
 const { postToChat, liveAgentInRepo } = require('./team');
-const { taskLabel, buildBrief } = require('./commands');
+const { taskLabel, buildBrief, spawnAgent } = require('./commands');
 const { toMs } = require('./util');
 const T = require('./tui');
 
@@ -164,9 +164,20 @@ function renderChat(d, file, files, ui) {
 }
 
 // Slash commands typed in the chat input. Results are private (ui.block).
-function runSlash(body, d, ui) {
+// `paint` lets long-running commands show progress before blocking.
+function runSlash(body, d, ui, paint) {
   const [cmd, ...rest] = body.slice(1).split(/\s+/);
   if (cmd === 'clear') { ui.block = null; return; }
+  if (cmd === 'spawn') {
+    // /spawn <name> [kind] [purpose...]
+    const [name, kind, ...purpose] = rest;
+    ui.block = { title: 'spawn', lines: [`starting ${name || '?'}${kind ? ` (${kind})` : ''}… (can take up to a minute)`] };
+    if (paint) paint();
+    const r = spawnAgent({ name: humanName(), human: true },
+      { name, kind: kind || null, purpose: purpose.join(' ') || null }, d);
+    ui.block = { title: r.ok ? 'spawned' : 'spawn failed', lines: r.lines };
+    return;
+  }
   if (cmd === 'brief' && rest[0] === 'share') {
     if (!ui.lastBrief) { ui.block = { title: 'brief', lines: ['nothing to share — run /brief first'] }; return; }
     postToChat({ name: humanName(), human: true }, `brief (since ${ui.lastBrief.since}):\n${ui.lastBrief.lines.join('\n')}`, d, viewMentionResolver(d));
@@ -182,7 +193,7 @@ function runSlash(body, d, ui) {
     } catch (e) { ui.block = { title: 'brief', lines: [String(e.message)] }; }
     return;
   }
-  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/clear'] };
+  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/spawn <name> [kind] [purpose...]', '/clear'] };
 }
 
 // -------------------------------------------------------------------- board
@@ -288,7 +299,7 @@ function runView(render, { input = false } = {}) {
           const body = ui.buffer.trim();
           ui.buffer = ''; ui.offset = 0;
           if (body.startsWith('/')) {
-            runSlash(body, d, ui);
+            runSlash(body, d, ui, paint);
           } else if (body) {
             ui.block = null;
             const { pushed, warnings } = postToChat({ name: humanName(), human: true }, body, d, viewMentionResolver(d));

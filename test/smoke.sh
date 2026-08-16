@@ -88,6 +88,22 @@ sleep 1
 $CH brief | grep -q "brief test task" && fail "brief mark did not advance" || ok "brief mark advances (task not repeated)"
 $CH brief 2h | grep -q "brief test task" && ok "explicit window still sees it" || fail "explicit window still sees it"
 
+echo "# data + purge"
+cd "$REPO"
+$CH data | grep -q "repo-a" && ok "data lists universes" || fail "data lists universes"
+$CH purge repo-a | grep -q "would delete" && ok "purge defaults to dry run" || fail "purge defaults to dry run"
+$CH data | grep -q "repo-a" && ok "dry run deleted nothing" || fail "dry run deleted nothing"
+REPO_C="$TMP/repo-c"; mkdir -p "$REPO_C" && git -C "$REPO_C" init -q
+( cd "$REPO_C" && $CH note "orphan bait" >/dev/null 2>&1 )
+rm -rf "$REPO_C"
+$CH data | grep -q "ORPHAN" && ok "orphan detected" || fail "orphan detected"
+$CH purge --orphans --yes | grep -q "deleted" && ok "orphan purged" || fail "orphan purged"
+$CH data | grep -q "ORPHAN" && fail "orphan still listed" || ok "orphan gone from data"
+$CH purge --older-than 0h --yes >/dev/null 2>&1 && ok "older-than trim runs" || fail "older-than trim runs"
+
+echo "# spawn (failure path — no herdr available here)"
+$CH spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
+
 echo "# setup --yes + doctor"
 SETHOME="$TMP/sethome"; mkdir -p "$SETHOME/.config/herdr" "$SETHOME/.local/bin"
 cd "$REPO"
