@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { liveAgents, matchLive } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
-const { postToChat } = require('./team');
+const { postToChat, liveAgentInRepo } = require('./team');
 const { taskLabel } = require('./commands');
 const { toMs } = require('./util');
 const T = require('./tui');
@@ -61,7 +61,7 @@ function headerBar(file, files, width) {
 function feedRows(d) {
   return d.prepare(`SELECT * FROM messages
     WHERE to_agent = '#chat' OR kind != 'mention'
-    ORDER BY id`).all();
+    ORDER BY id DESC LIMIT 500`).all().reverse();
 }
 
 function buildFeedLines(rows, width, human, openPointer) {
@@ -98,7 +98,7 @@ function buildFeedLines(rows, width, human, openPointer) {
     }
     const prefix = isDM ? `    ${T.fg(T.authorHue(m.from_agent))}│${T.RESET} ` : '    ';
     const style = (isDM && !mine) ? (l) => `${T.CHROME}${l}${T.RESET}` : (l) => highlightMentions(l, human);
-    for (const l of T.wrap(m.body, bodyW)) lines.push(prefix + style(l));
+    for (const l of T.wrap(T.clean(m.body), bodyW)) lines.push(prefix + style(l));
     prev = m;
   }
   return lines;
@@ -182,13 +182,13 @@ function renderBoard(d, file, files) {
   }
   out.push('', ` ${T.BOLD}Group chat${T.RESET}`);
   if (!msgs.length) out.push(`   ${T.FAINT}(no posts yet)${T.RESET}`);
-  for (const m of msgs) out.push(`  ${T.CHROME}${localHM(m.created_at)}${T.RESET} ${T.author(m.from_agent)}: ${highlightMentions(m.body, humanName())}`.slice(0, width + 60));
+  for (const m of msgs) out.push(`  ${T.CHROME}${localHM(m.created_at)}${T.RESET} ${T.author(m.from_agent)}: ${highlightMentions(T.clean(m.body), humanName())}`.slice(0, width + 60));
   out.push('', ` ${T.BOLD}Tasks${T.RESET}`);
   if (!tasks.length) out.push(`   ${T.FAINT}(none)${T.RESET}`);
   for (const t of tasks) out.push('  ' + taskLabel(t));
   out.push('', ` ${T.BOLD}Shared memory${T.RESET}`);
   if (!notes.length) out.push(`   ${T.FAINT}(empty)${T.RESET}`);
-  for (const n of notes) out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${n.text}`.slice(0, width + 60));
+  for (const n of notes) out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${T.clean(n.text)}`.slice(0, width + 60));
   out.push('', ` ${T.FAINT}q closes · 1-9 switch repo${T.RESET}`);
   return out.slice(0, height);
 }
@@ -198,7 +198,9 @@ function renderBoard(d, file, files) {
 function viewMentionResolver(d) {
   return (input) => {
     const names = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
-    for (const a of liveAgents()) if (a.name) names.add(a.name);
+    // Live-but-unregistered candidates must verifiably live in this repo —
+    // the popup must not pierce the per-repo boundary.
+    for (const a of liveAgents()) if (a.name && !names.has(a.name) && liveAgentInRepo(a, d)) names.add(a.name);
     if (names.has(input)) return input;
     const hits = [...names].filter((n) => n.startsWith(input));
     return hits.length === 1 ? hits[0] : null;

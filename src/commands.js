@@ -9,16 +9,20 @@ const { db, now, gitInfo, stateRoot, repoDbFile, openDbFile, listRepoDbFiles } =
 const { whoami, sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount } = require('./team');
 const { configRoot, humanName } = require('./db');
 const { die, parseFlags, emit, age, toMs, median, fmtDur } = require('./util');
+const { clean } = require('./tui');
 
 const NOTE_TYPES = ['note', 'discovery', 'decision', 'dead-end', 'question'];
 
 // ---------------------------------------------------------------- messaging
 
 function cmdSend(me, args) {
-  const opts = parseFlags(args, { queue: false });
-  const body = opts._.slice(1).join(' ').trim();
-  if (!opts._[0] || !body) die('usage: chatter send <agent> <message...> [--queue]');
-  const to = resolveRecipient(opts._[0], { allowUnknown: opts.queue });
+  // Message bodies are raw text — only a trailing --queue is a flag, so
+  // bodies containing "--anything" survive verbatim.
+  const queue = args[args.length - 1] === '--queue';
+  const rest = queue ? args.slice(0, -1) : args;
+  const body = rest.slice(1).join(' ').trim();
+  if (!rest[0] || !body) die('usage: chatter send <agent> <message...> [--queue]');
+  const to = resolveRecipient(rest[0], { allowUnknown: queue });
   if (to === me.name) die('cannot message yourself');
   const res = sendMessage(me.name, to, body);
   console.log(res.delivered ? `delivered to ${to}` : `queued: ${res.reason}`);
@@ -40,7 +44,7 @@ function cmdChat(me, args) {
   const rows = db().prepare(`SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC${limit}`).all().reverse();
   emit(rows, () => {
     if (!rows.length) { console.log('group chat is empty — post with: chatter post <text> (mention with @name)'); return; }
-    for (const m of rows) console.log(`#${m.id} ${m.created_at} ${m.from_agent}: ${m.body}`);
+    for (const m of rows) console.log(`#${m.id} ${m.created_at} ${m.from_agent}: ${clean(m.body)}`);
   });
   const maxId = rows.length ? rows[rows.length - 1].id : 0;
   if (maxId) {
@@ -58,7 +62,7 @@ function cmdInbox(me, args) {
     if (!rows.length) { console.log(opts.all ? 'no messages' : 'no unread messages'); return; }
     for (const m of rows) {
       const tag = m.kind === 'chat' ? '' : ` [${m.kind}${m.ref_id ? ' ' + m.ref_id : ''}]`;
-      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}${tag}: ${m.body}`);
+      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}${tag}: ${clean(m.body)}`);
     }
   });
   if (!opts.all && rows.length) {
@@ -82,7 +86,7 @@ function cmdLog(_me, args) {
   emit(rows, () => {
     for (const m of [...rows].reverse()) {
       const st = m.read_at ? '' : m.delivered_at ? ' (unread)' : ' (queued)';
-      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}: ${m.body}${st}`);
+      console.log(`#${m.id} ${m.created_at} ${m.from_agent} -> ${m.to_agent}: ${clean(m.body)}${st}`);
     }
     if (!rows.length) console.log('no messages match');
   });
@@ -132,8 +136,14 @@ function cmdIam(_me, args) {
   if (!args[0]) { console.log(`you are "${humanName()}" — change with: chatter iam <name>`); return; }
   const name = args[0].toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32);
   if (!name) die('usage: chatter iam <name>');
-  const clash = liveAgents().some((a) => a.name === name);
-  if (clash) die(`"${name}" is a live agent's name — pick another`);
+  // A collision would silently redirect that agent's mail to the human —
+  // check live agents AND every repo's registered roster.
+  if (liveAgents().some((a) => a.name === name)) die(`"${name}" is a live agent's name — pick another`);
+  for (const f of listRepoDbFiles()) {
+    if (openDbFile(f).prepare('SELECT 1 FROM agents WHERE name = ?').get(name)) {
+      die(`"${name}" is a registered agent in ${path.basename(path.dirname(f))} — pick another`);
+    }
+  }
   fsx.mkdirSync(configRoot(), { recursive: true });
   fsx.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
   console.log(`you are now "${name}" — agents can reach you with: chatter send ${name} "..." or @${name} in #chat`);
@@ -163,7 +173,7 @@ function cmdNotes(_me, args) {
     for (const n of [...rows].reverse()) {
       const refs = [n.task_id, n.commit_sha && n.commit_sha.slice(0, 8)].filter(Boolean).join(' ');
       const st = n.status === 'active' ? '' : ` (${n.status}${n.superseded_by ? ` by #${n.superseded_by}` : ''})`;
-      console.log(`#${n.id} [${n.type}] ${n.author}: ${n.text}${refs ? `  (${refs})` : ''}${st}`);
+      console.log(`#${n.id} [${n.type}] ${n.author}: ${clean(n.text)}${refs ? `  (${refs})` : ''}${st}`);
     }
   });
 }
@@ -226,7 +236,7 @@ function cmdQuestions(_me, args) {
     const rows = openQuestions();
     emit(rows, () => {
       if (!rows.length) { console.log('no open questions'); return; }
-      for (const r of rows) console.log(`#${r.id} (${age(r.created_at)} old) ${r.author}: ${r.text}  (answer: chatter answer ${r.id} "...")`);
+      for (const r of rows) console.log(`#${r.id} (${age(r.created_at)} old) ${r.author}: ${clean(r.text)}  (answer: chatter answer ${r.id} "...")`);
     });
     return;
   }
@@ -238,9 +248,9 @@ function cmdQuestions(_me, args) {
   emit(rows.map((r) => ({ ...r, answer: answers[r.superseded_by] || null })), () => {
     if (!rows.length) { console.log('no questions'); return; }
     for (const r of rows) {
-      console.log(`#${r.id} [${r.status}] ${r.author}: ${r.text}`);
+      console.log(`#${r.id} [${r.status}] ${r.author}: ${clean(r.text)}`);
       const a = answers[r.superseded_by];
-      if (a) console.log(`    -> ${a.author}: ${a.text.replace(/^answer to #\d+: /, '')}`);
+      if (a) console.log(`    -> ${a.author}: ${clean(a.text).replace(/^answer to #\d+: /, '')}`);
     }
   });
 }
@@ -269,11 +279,25 @@ function cmdTask(me, args) {
     const opts = parseFlags(args.slice(1), { assignee: null });
     const title = opts._.join(' ').trim();
     if (!title) die('usage: chatter task create <title> [--assignee agent]');
-    const id = nextTaskId();
-    db().prepare('INSERT INTO tasks (id, title, status, assignee, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
-      .run(id, title, opts.assignee ? 'in_progress' : 'open', opts.assignee, me.name, now(), now());
-    console.log(`${id} created${opts.assignee ? ` and assigned to ${opts.assignee}` : ''}`);
-    notifyAssignment(me, { id, title, assignee: opts.assignee });
+    const assignee = opts.assignee ? resolveRecipient(opts.assignee) : null;
+    // ID allocation + insert must be atomic: concurrent creates otherwise
+    // race MAX+1 into duplicate primary keys.
+    let id = null;
+    for (let attempt = 0; attempt < 5 && !id; attempt++) {
+      try {
+        db().exec('BEGIN IMMEDIATE');
+        const candidate = nextTaskId();
+        db().prepare('INSERT INTO tasks (id, title, status, assignee, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
+          .run(candidate, title, assignee ? 'in_progress' : 'open', assignee, me.name, now(), now());
+        db().exec('COMMIT');
+        id = candidate;
+      } catch (e) {
+        try { db().exec('ROLLBACK'); } catch { /* not in tx */ }
+        if (attempt === 4) throw e;
+      }
+    }
+    console.log(`${id} created${assignee ? ` and assigned to ${assignee}` : ''}`);
+    notifyAssignment(me, { id, title, assignee });
   } else if (sub === 'list') {
     const rows = db().prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id").all();
     emit(rows, () => {
@@ -329,12 +353,22 @@ function cmdHandoff(me, args) {
   // Fill git context from the caller's worktree when not given explicitly.
   const branch = opts.branch || gitInfo(process.cwd()).branch;
   const files = opts.files ? opts.files.split(',').map((s) => s.trim()).filter(Boolean) : [];
-  const hid = db().prepare(`INSERT INTO handoffs (task_id, from_agent, to_agent, summary, branch, commit_sha, files_json, tests, next_steps, created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`)
-    .run(taskId, me.name, to, opts.summary, branch, opts.commit, JSON.stringify(files), opts.tests, opts.next, now()).lastInsertRowid;
-  db().prepare("UPDATE tasks SET assignee = ?, status = 'in_progress', updated_at = ? WHERE id = ?").run(to, now(), taskId);
-  db().prepare('INSERT INTO notes (author, type, text, task_id, commit_sha, created_at) VALUES (?,?,?,?,?,?)')
-    .run(me.name, 'note', `handed off ${taskId} to ${to}: ${opts.summary}`, taskId, opts.commit, now());
+  // One transaction: a crash mid-handoff must not leave ownership, the
+  // handoff record, and the audit note disagreeing.
+  let hid;
+  db().exec('BEGIN IMMEDIATE');
+  try {
+    hid = db().prepare(`INSERT INTO handoffs (task_id, from_agent, to_agent, summary, branch, commit_sha, files_json, tests, next_steps, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(taskId, me.name, to, opts.summary, branch, opts.commit, JSON.stringify(files), opts.tests, opts.next, now()).lastInsertRowid;
+    db().prepare("UPDATE tasks SET assignee = ?, status = 'in_progress', updated_at = ? WHERE id = ?").run(to, now(), taskId);
+    db().prepare('INSERT INTO notes (author, type, text, task_id, commit_sha, created_at) VALUES (?,?,?,?,?,?)')
+      .run(me.name, 'note', `handed off ${taskId} to ${to}: ${opts.summary}`, taskId, opts.commit, now());
+    db().exec('COMMIT');
+  } catch (e) {
+    try { db().exec('ROLLBACK'); } catch { /* not in tx */ }
+    throw e;
+  }
   const parts = [`${taskId} ${opts.summary}`];
   if (branch) parts.push(`branch ${branch}`);
   if (opts.commit) parts.push(`commit ${opts.commit.slice(0, 12)}`);
@@ -469,9 +503,15 @@ function ensurePointerAndSymlink() {
   const link = path.join(os.homedir(), '.local', 'bin', 'chatter');
   try {
     fs.mkdirSync(path.dirname(link), { recursive: true });
-    // lstat (not stat/existsSync): a dangling symlink must still be replaced.
-    let current = null;
-    try { current = fs.readlinkSync(link); } catch { /* absent or not a symlink */ }
+    // lstat: only ever replace a symlink or create fresh — never delete a
+    // regular file someone else installed at this path.
+    let st = null;
+    try { st = fs.lstatSync(link); } catch { /* absent */ }
+    if (st && !st.isSymbolicLink()) {
+      console.error(`${link} exists and is not a symlink — leaving it alone`);
+      return;
+    }
+    const current = st ? fs.readlinkSync(link) : null;
     if (path.resolve(path.dirname(link), current || '') !== path.resolve(target)) {
       fs.rmSync(link, { force: true });
       fs.symlinkSync(path.resolve(target), link);

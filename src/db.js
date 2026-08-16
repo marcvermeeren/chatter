@@ -71,8 +71,8 @@ function repoKey(repoRoot) {
 }
 
 const SCHEMA = `
-  PRAGMA journal_mode = WAL;
   PRAGMA busy_timeout = 3000;
+  PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS agents (
     name TEXT PRIMARY KEY, pane_id TEXT, workspace_id TEXT, cwd TEXT,
     repo_root TEXT, branch TEXT, kind TEXT, role TEXT,
@@ -134,4 +134,7 @@ function db() {
 
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, now };
+// Which on-disk file a handle is operating on (repo-boundary checks).
+const dbFile = (d) => d.prepare("SELECT file FROM pragma_database_list WHERE name='main'").get().file;
+
+module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, dbFile, now };

@@ -9,7 +9,11 @@ const { whoami, flushPending } = require('../src/team');
 const c = require('../src/commands');
 const { cmdBoard, cmdChatView } = require('../src/board');
 
-const argv = process.argv.slice(2).filter((a) => {
+// Message content is sacred: commands whose args are free text never have
+// flags plucked out of them. Everything else accepts --json anywhere.
+const raw = process.argv.slice(2);
+const CONTENT_CMDS = new Set(['send', 'post', 'ask', 'answer']);
+const argv = CONTENT_CMDS.has(raw[0]) ? raw : raw.filter((a) => {
   if (a === '--json') { setJsonOut(true); return false; }
   return true;
 });
@@ -35,6 +39,11 @@ const COMMANDS = {
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;
 if (!run) die(`unknown command "${cmd}" — try: chatter help`);
 
-run(whoami(), args);
+try {
+  run(whoami(), args);
+} catch (e) {
+  if (process.env.CHATTER_DEBUG) throw e;
+  die(`chatter: ${e.message}`);
+}
 // Piggyback: any chatter activity flushes queued mail for everyone.
 try { flushPending(); } catch { /* best effort */ }

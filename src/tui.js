@@ -27,6 +27,11 @@ function authorHue(name) {
 const author = (name) => `${fg(authorHue(name))}${BOLD}${name}${RESET}`;
 
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+
+// Stored text is untrusted terminal-wise: strip control chars (ANSI/OSC
+// included) before rendering so a message can't spoof UI or touch the
+// terminal/clipboard. Same rules as delivery sanitization.
+const clean = (s) => String(s).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 const visWidth = (s) => [...stripAnsi(s)].length;
 
 // Word-aware wrap; ANSI-free input expected (style is applied per line after).
@@ -76,5 +81,5 @@ function decodeKey(s) {
 
 module.exports = {
   RESET, BOLD, INV, fg, bg, CHROME, FAINT, GREEN, YELLOW, CYAN, NEWMARK,
-  authorHue, author, stripAnsi, visWidth, wrap, makePainter, decodeKey,
+  authorHue, author, stripAnsi, clean, visWidth, wrap, makePainter, decodeKey,
 };

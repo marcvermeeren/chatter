@@ -187,7 +187,15 @@ fields to maintain — purpose lives in names the human already gave.
 - `--entrypoint chat`: the chat window (input line, scrolling, completion).
 - `--entrypoint board`: read-only overview — agents with live status dots,
   role, branch, and current task; recent chat; tasks; shared memory.
-- Both switch repos with number keys and follow the focused workspace.
+- Both follow the focused workspace's repo. The board switches repos with
+  number keys; in the chat view digits are typing (it stays on its repo).
+
+### Tests
+
+`sh test/smoke.sh` — isolated state dir + scratch repos, no Herdr needed.
+Covers the basics plus regressions for concurrency (20 parallel task
+creates), message-content preservation, recipient validation, install
+safety, and per-repo isolation.
 
 ---
 
@@ -228,6 +236,12 @@ against your Herdr session.
   pane. The hard boundaries remain your user account and machine.
 - Identity is honor-system per pane. No network exposure: no sockets opened,
   all SQL parameterized, every subprocess is an argv array (no shell).
+- Stored text is sanitized at *render* time too (window and CLI), so a
+  message can't emit terminal escapes at whoever reads it later.
+- Known trade-off: delivery claims a message atomically *before* injecting
+  (prevents double-delivery). A crash in that ~100ms window can mark a
+  message delivered without it landing; it remains visible as `(unread)` in
+  `chatter log`.
 
 ## The experiment
 

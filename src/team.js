@@ -5,8 +5,15 @@
 
 const path = require('node:path');
 const { herdr, liveAgents, invalidateLiveAgents, paneLabel } = require('./herdr');
-const { db, now, gitInfo, humanName } = require('./db');
+const { db, dbFile, now, gitInfo, humanName, repoDbFile } = require('./db');
 const { die } = require('./util');
+
+// Does this live agent belong to the repo a DB handle serves?
+function liveAgentInRepo(agent, d) {
+  if (!agent.cwd) return false;
+  const g = gitInfo(agent.cwd);
+  return !!g.repoRoot && repoDbFile(g.repoRoot) === dbFile(d);
+}
 
 // ---------------------------------------------------------------- identity
 
@@ -105,11 +112,17 @@ function resolveRecipient(input, { allowUnknown = false, soft = false } = {}) {
 const DELIVERABLE = new Set(['idle', 'done', 'working', 'unknown']);
 
 function resolveTarget(name, live, d = db()) {
+  const registered = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
   const byName = live.find((x) => x.name === name);
-  if (byName) return { paneId: byName.pane_id, status: byName.agent_status };
+  // Defense in depth for the repo boundary: only inject when the live agent
+  // is the pane we registered, or verifiably works in this repo (Herdr frees
+  // names on exit, so a name can be reused by an agent in another repo).
+  if (byName && ((registered && registered.pane_id === byName.pane_id) || liveAgentInRepo(byName, d))) {
+    return { paneId: byName.pane_id, status: byName.agent_status };
+  }
   // Last-known pane, but only if it isn't now occupied by a differently-named
   // agent — otherwise the message would land in the wrong session.
-  const row = d.prepare('SELECT pane_id FROM agents WHERE name = ?').get(name);
+  const row = registered;
   if (row) {
     const atPane = live.find((x) => x.pane_id === row.pane_id);
     if (atPane && !atPane.name) return { paneId: atPane.pane_id, status: atPane.agent_status };
@@ -235,6 +248,6 @@ function postToChat(me, body, d = db(), resolveMention = (n) => resolveRecipient
 }
 
 module.exports = {
-  sanitizeName, whoami, resolveRecipient, resolveTarget,
+  sanitizeName, whoami, resolveRecipient, resolveTarget, liveAgentInRepo,
   formatDelivery, tryDeliver, flushPending, sendMessage, postToChat, chatUnreadCount,
 };

@@ -1,6 +1,6 @@
 id = "chatter"
 name = "Chatter"
-version = "0.7.1"
+version = "0.8.0"
 min_herdr_version = "0.8.0"
 description = "Group chat for coding agents: cross-worktree messages, shared notes, tasks, and handoffs"
 platforms = ["linux", "macos"]
