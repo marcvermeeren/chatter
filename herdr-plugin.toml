@@ -1,6 +1,6 @@
 id = "chatter"
 name = "Chatter"
-version = "0.16.1"
+version = "0.16.2"
 min_herdr_version = "0.8.0"
 description = "Group chat for coding agents. After install run: herdr plugin action invoke chatter.setup"
 platforms = ["linux", "macos"]

@@ -142,6 +142,13 @@ grep -q "worktree create --cwd" "$FAKE_CALLS" && grep -q "branch agents/helper2"
 grep -q "tab create" "$FAKE_CALLS" && fail "worktree spawn also made a tab" || ok "no tab for worktree spawn"
 grep -q "agent start helper2" "$FAKE_CALLS" && ok "agent started in worktree pane" || fail "agent started in worktree pane"
 echo "$OUT" | grep -q "new worktree" && ok "output names the worktree setup" || fail "output names the worktree setup"
+# Shell-not-ready race: two busy refusals, then success — spawn must retry.
+echo 2 > "$TMP/busy-count"
+: > "$FAKE_CALLS"
+FAKE_BUSY="$TMP/busy-count" $CHF spawn helper4 --kind pi >/dev/null 2>&1 \
+  && ok "spawn retries through agent_pane_busy" || fail "spawn retries through agent_pane_busy"
+STARTS=$(grep -c "agent start helper4" "$FAKE_CALLS")
+[ "$STARTS" = "3" ] && ok "retried exactly until the shell was ready ($STARTS starts)" || fail "unexpected retry count: $STARTS"
 : > "$FAKE_CALLS"
 $CHF spawn helper3 --kind pi --tab >/dev/null 2>&1
 grep -q "tab create" "$FAKE_CALLS" && ok "--tab uses same-checkout tab" || fail "--tab uses same-checkout tab"

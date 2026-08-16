@@ -659,7 +659,14 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     whereLine = `new worktree on ${wtBranch}${wtPath ? ` (${wtPath})` : ''} — isolated checkout`;
     lines.push(`cleanup when done: herdr worktree remove --path ${wtPath || '<worktree-path>'}`);
   }
-  const start = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '60000']);
+  // A fresh worktree/tab's shell may not be at its prompt yet — Herdr then
+  // refuses with agent_pane_busy. Retry briefly instead of giving up.
+  let start;
+  for (let attempt = 0; attempt < 15; attempt++) {
+    start = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '60000']);
+    if (start.ok || !(start.raw || '').includes('agent_pane_busy')) break;
+    require('node:child_process').spawnSync('sleep', ['1']);
+  }
   if (!start.ok) {
     if (cleanup) cleanup();
     return fail(`agent start failed: ${start.raw}${cleanup ? '' : ' (worktree left in place)'}`);
