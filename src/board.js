@@ -55,10 +55,13 @@ function headerBar(file, files, width) {
 
 // --------------------------------------------------------------- chat window
 
-function feedRows(d, human) {
+// The human's window is omniscient: channel posts plus ALL direct traffic,
+// including agent-to-agent DMs. Mention rows are per-recipient copies of a
+// channel post, so they're skipped (the post itself shows).
+function feedRows(d) {
   return d.prepare(`SELECT * FROM messages
-    WHERE to_agent = '#chat' OR (kind != 'mention' AND (to_agent = ? OR from_agent = ?))
-    ORDER BY id`).all(human, human);
+    WHERE to_agent = '#chat' OR kind != 'mention'
+    ORDER BY id`).all();
 }
 
 function buildFeedLines(rows, width, human, openPointer) {
@@ -78,14 +81,24 @@ function buildFeedLines(rows, width, human, openPointer) {
     const isDM = m.to_agent !== '#chat';
     const grouped = prev && prev.from_agent === m.from_agent && prev.to_agent === m.to_agent
       && (toMs(m.created_at) - toMs(prev.created_at)) < 5 * 60 * 1000;
+    const mine = m.from_agent === human || m.to_agent === human;
     if (!grouped) {
       if (lines.length) lines.push('');
       const you = m.from_agent === human ? ` ${T.FAINT}(you)${T.RESET}` : '';
-      const tag = !isDM ? '' : ` ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
-      lines.push(`  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}${tag}`);
+      let head;
+      if (!isDM) {
+        head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
+      } else if (mine) {
+        head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
+      } else {
+        // Agent-to-agent DM: both names colored, visibly quieter.
+        head = `  ${T.author(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
+      }
+      lines.push(head);
     }
     const prefix = isDM ? `    ${T.fg(T.authorHue(m.from_agent))}│${T.RESET} ` : '    ';
-    for (const l of T.wrap(m.body, bodyW)) lines.push(prefix + highlightMentions(l, human));
+    const style = (isDM && !mine) ? (l) => `${T.CHROME}${l}${T.RESET}` : (l) => highlightMentions(l, human);
+    for (const l of T.wrap(m.body, bodyW)) lines.push(prefix + style(l));
     prev = m;
   }
   return lines;
@@ -95,7 +108,7 @@ function renderChat(d, file, files, ui) {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const human = humanName();
-  const rows = feedRows(d, human);
+  const rows = feedRows(d);
   ui.lastMaxId = rows.length ? rows[rows.length - 1].id : 0;
 
   // Seeing the latest IS reading — but only while pinned to the bottom.
