@@ -48,10 +48,43 @@ function chatLines(d, limit) {
   return rows.map((m) => ` ${m.created_at.slice(11, 16)} ${B(m.from_agent)}: ${m.body}`.slice(0, 160));
 }
 
-function renderChat(d, file, files, inputBuffer) {
-  const rowsWanted = Math.max(5, (process.stdout.rows || 30) - 7);
-  const input = `\n${B(' > ')}${inputBuffer}\x1b[7m \x1b[0m\n   Enter posts as ${B(humanName())} (@name pushes) · Esc closes`;
-  process.stdout.write('\x1b[2J\x1b[H' + header('#chat', file, files) + '\n' + chatLines(d, rowsWanted).join('\n') + input + '\n');
+// The human's conversation surface: channel posts plus DMs to/from the human,
+// inline. Mention rows are skipped (their #chat post already shows).
+function humanFeedLines(d, limit) {
+  const h = humanName();
+  const rows = d.prepare(`SELECT * FROM messages
+    WHERE to_agent = '#chat' OR (kind != 'mention' AND (to_agent = ? OR from_agent = ?))
+    ORDER BY id DESC LIMIT ${limit}`).all(h, h).reverse();
+  if (!rows.length) return { lines: ['   (no posts yet — type below to say something)'], rows };
+  const lines = rows.map((m) => {
+    const t = m.created_at.slice(11, 16);
+    if (m.to_agent === '#chat') return ` ${t} ${B(m.from_agent)}: ${m.body}`.slice(0, 160);
+    if (m.to_agent === h) return ` ${t} \x1b[36m${B(m.from_agent)} → you (DM)\x1b[0m: ${m.body}`.slice(0, 170);
+    return ` ${t} \x1b[36myou → ${m.to_agent} (DM)\x1b[0m: ${m.body}`.slice(0, 170);
+  });
+  return { lines, rows };
+}
+
+function renderChat(d, file, files, ui = {}) {
+  const buffer = ui.buffer || '';
+  const rowsWanted = Math.max(5, (process.stdout.rows || 30) - 9);
+  const { lines, rows } = humanFeedLines(d, rowsWanted);
+  // Seeing the window IS reading: mark shown DMs read, advance the chat pointer.
+  const h = humanName();
+  const dmIds = rows.filter((m) => m.to_agent === h && !m.read_at).map((m) => m.id);
+  if (dmIds.length) d.prepare(`UPDATE messages SET read_at = datetime('now') WHERE id IN (${dmIds.join(',')})`).run();
+  const maxChat = rows.filter((m) => m.to_agent === '#chat').map((m) => m.id).pop();
+  if (maxChat) {
+    d.prepare(`INSERT INTO chat_reads (agent, last_read_id) VALUES (?,?)
+      ON CONFLICT(agent) DO UPDATE SET last_read_id = MAX(last_read_id, excluded.last_read_id)`).run(h, maxChat);
+  }
+  // @-completion strip while a mention is being typed.
+  const mention = buffer.match(/@([a-z0-9_-]*)$/);
+  const hits = mention ? (ui.names || []).filter((n) => n.startsWith(mention[1])) : [];
+  const strip = hits.length ? `\n   ${hits.map((n) => '@' + n).join('  ')}   (Tab completes)` : '';
+  const status = ui.status ? `\n   ${ui.status}` : '';
+  const input = `${strip}\n${B(' > ')}${buffer}\x1b[7m \x1b[0m${status}\n   Enter posts as ${B(h)} (@name pushes) · Esc closes`;
+  process.stdout.write('\x1b[2J\x1b[H' + header('#chat', file, files) + '\n' + lines.join('\n') + input + '\n');
 }
 
 function renderBoard(d, file, files) {
@@ -99,7 +132,18 @@ function runView(render, { input = false } = {}) {
   if (!file) { console.log('no chatter data yet — run chatter inside a git repo first'); process.exit(0); }
   let d = openDbFile(file);
   let buffer = '';
-  const paint = () => { files = listRepoDbFiles(); render(d, file, files, buffer); };
+  let status = '';
+  let names = [];
+  const refreshNames = () => {
+    const set = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
+    for (const a of liveAgents({ fresh: true })) if (a.name) set.add(a.name);
+    names = [...set].sort();
+  };
+  const paint = () => {
+    files = listRepoDbFiles();
+    if (input) refreshNames();
+    render(d, file, files, { buffer, status, names });
+  };
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
@@ -126,12 +170,24 @@ function runView(render, { input = false } = {}) {
       if (s === '\r' || s === '\n') {
         const body = buffer.trim();
         buffer = '';
-        if (body) postToChat({ name: humanName(), human: true }, body, d, viewMentionResolver(d));
+        if (body) {
+          const { pushed, warnings } = postToChat({ name: humanName(), human: true }, body, d, viewMentionResolver(d));
+          status = warnings.length ? `\x1b[33m⚠ ${warnings.join(' · ')}\x1b[0m`
+            : pushed.length ? `\x1b[32m✓ pushed to ${pushed.join(', ')}\x1b[0m` : '\x1b[32m✓ posted\x1b[0m';
+        }
         return paint();
       }
-      if (s === '\x7f' || s === '\b') { buffer = buffer.slice(0, -1); return paint(); }
+      if (s === '\t') {
+        const m = buffer.match(/@([a-z0-9_-]*)$/);
+        if (m) {
+          const hits = names.filter((n) => n.startsWith(m[1]));
+          if (hits.length) buffer = buffer.slice(0, buffer.length - m[1].length) + hits[0] + ' ';
+        }
+        return paint();
+      }
+      if (s === '\x7f' || s === '\b') { buffer = buffer.slice(0, -1); status = ''; return paint(); }
       const printable = s.replace(/[\x00-\x1f\x7f]/g, '');
-      if (printable) { buffer += printable; paint(); }
+      if (printable) { buffer += printable; status = ''; paint(); }
     });
   }
   paint();

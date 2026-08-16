@@ -138,7 +138,12 @@ function formatDelivery(msg, d = db()) {
     : `[chatter] message from ${msg.from_agent}`;
   const unread = chatUnreadCount(msg.to_agent, d);
   const chat = unread ? ` | #chat: ${unread} unread (chatter chat)` : '';
-  return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — reply: chatter send ${msg.from_agent} "..." | inbox: chatter inbox${chat} | all commands: chatter help)`;
+  // Channel mentions teach channel replies — agents follow the footer
+  // literally, so it decides etiquette (learned the hard way).
+  const reply = msg.kind === 'mention'
+    ? `reply in #chat: chatter post "@${msg.from_agent} ..."`
+    : `reply: chatter send ${msg.from_agent} "..."`;
+  return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — ${reply} | inbox: chatter inbox${chat} | all commands: chatter help)`;
 }
 
 // Deliver one message: agents get a session injection; the human gets a toast
@@ -149,10 +154,12 @@ function tryDeliver(msg, live, d = db()) {
     const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
       .run(now(), msg.id);
     if (claim.changes !== 1) return false;
-    // Best effort: mark delivered even if toasts are configured off, so the
-    // flush loop doesn't re-toast forever. read_at stays null until viewed.
+    // The toast is a pointer, not the message — content is read in the chat
+    // window. Best effort: mark delivered even if toasts are configured off,
+    // so the flush loop doesn't re-toast forever. read_at stays null until viewed.
+    const what = msg.kind === 'mention' ? 'mentioned you in #chat' : 'sent you a direct message';
     herdr(['notification', 'show', `chatter: ${msg.from_agent}`,
-      '--body', deliveryText(msg.body).slice(0, 200), '--sound', 'request']);
+      '--body', `${what} — open the chatter window to read`, '--sound', 'request']);
     return true;
   }
   const t = resolveTarget(msg.to_agent, live, d);
