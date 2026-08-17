@@ -130,6 +130,8 @@ roster, reviews it once, creates agents in order, then optionally sends all
 purposes and one team announcement together. Chatter starts teammates but does
 not kill, restart, or remove their worktrees.
 
+![Choosing a teammate handle, agent harness, and checkout mode in Chatter](assets/spawn-wizard.gif)
+
 ### Briefs and measurement
 
 `chatter brief [today|2h|30m]` summarizes changes since the last look. In chat,
