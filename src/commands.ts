@@ -6,7 +6,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { SQLInputValue } from 'node:sqlite';
-import { PLUGIN_ID, herdr, invalidateSessionAgents, isRecord, matchLive } from './herdr';
+import {
+  PLUGIN_ID, herdr, invalidateSessionAgents, isRecord, matchLive, pluginInvocationContext,
+} from './herdr';
 import { db, dbFile, now, gitInfo, repoDbFile, openDbFile, listRepoDbFiles, logEvent, configRoot, humanName } from './db';
 import { sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount, nameTaken, sanitizeName, teamAgents } from './team';
 import { die, parseFlags, emit, age, toMs, median, fmtDur } from './util';
@@ -1009,8 +1011,21 @@ export function hookFlush(): void {
 // (session-modal, Esc closes it); tab/split make it a persistent pane the
 // human keeps open beside their work.
 function openPane(entrypoint: string, placement: string | null = null): void {
+  const context = pluginInvocationContext(process.env.HERDR_PLUGIN_CONTEXT_JSON);
+  if (!context.cwd) {
+    die('Chatter needs an originating repository; focus a Herdr pane inside a Git repository and try again');
+  }
+  const repoRoot = gitInfo(context.cwd).repoRoot;
+  if (!repoRoot) {
+    die('Chatter needs an originating repository; focus a Herdr pane inside a Git repository and try again');
+  }
   const args = ['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', entrypoint];
   if (placement) args.push('--placement', placement);
+  // Herdr popups are attached to the active pane and reject explicit targets;
+  // tabs accept a workspace but reject target-pane. The repository env anchor
+  // is authoritative for both placements even if UI focus changes meanwhile.
+  if (placement === 'tab' && context.workspaceId) args.push('--workspace', context.workspaceId);
+  args.push('--env', `CHATTER_REPO_ROOT=${repoRoot}`);
   const r = herdr(args);
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }

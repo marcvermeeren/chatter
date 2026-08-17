@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.matchLive = exports.invalidateSessionAgents = exports.HERDR = exports.PLUGIN_ID = void 0;
 exports.herdr = herdr;
 exports.isRecord = isRecord;
+exports.pluginInvocationContext = pluginInvocationContext;
 exports.sessionAgents = sessionAgents;
 exports.paneLabel = paneLabel;
 // Talk to Herdr through its CLI (argv arrays only — never a shell).
@@ -24,6 +25,29 @@ function herdr(args) {
 let _live = null;
 function isRecord(value) {
     return typeof value === 'object' && value !== null;
+}
+const contextString = (value) => typeof value === 'string' && value.trim() ? value : null;
+// Actions run from the plugin directory, so process.cwd() is not repository
+// context. Keep the originating Herdr pane/workspace data typed in one place.
+function pluginInvocationContext(rawContext) {
+    if (!rawContext)
+        return { workspaceId: null, focusedPaneId: null, cwd: null };
+    try {
+        const parsed = JSON.parse(rawContext);
+        if (!isRecord(parsed))
+            return { workspaceId: null, focusedPaneId: null, cwd: null };
+        const worktree = isRecord(parsed.worktree) ? parsed.worktree : null;
+        return {
+            workspaceId: contextString(parsed.workspace_id),
+            focusedPaneId: contextString(parsed.focused_pane_id),
+            cwd: contextString(parsed.focused_pane_cwd)
+                ?? contextString(parsed.workspace_cwd)
+                ?? contextString(worktree?.checkout_path),
+        };
+    }
+    catch {
+        return { workspaceId: null, focusedPaneId: null, cwd: null };
+    }
 }
 function agentStatus(value) {
     switch (value) {

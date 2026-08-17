@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdChatView = exports.cmdBoard = void 0;
 exports.rosterIdentity = rosterIdentity;
 exports.pluginContextCwd = pluginContextCwd;
+exports.viewRepoCwd = viewRepoCwd;
 exports.headerBar = headerBar;
 exports.buildFeedLines = buildFeedLines;
 exports.nextWizardStep = nextWizardStep;
@@ -72,23 +73,20 @@ function dbFileForCwd(cwd) {
     return file;
 }
 function pluginContextCwd(rawContext) {
-    try {
-        const parsed = JSON.parse(rawContext);
-        const ctx = (0, herdr_1.isRecord)(parsed) ? parsed : {};
-        const worktree = (0, herdr_1.isRecord)(ctx.worktree) ? ctx.worktree : null;
-        return typeof worktree?.checkout_path === 'string' ? worktree.checkout_path
-            : typeof ctx.workspace_cwd === 'string' ? ctx.workspace_cwd
-                : typeof ctx.focused_pane_cwd === 'string' ? ctx.focused_pane_cwd : null;
-    }
-    catch {
-        return null;
-    }
+    return (0, herdr_1.pluginInvocationContext)(rawContext).cwd;
+}
+// An action-opened view receives an immutable repository anchor. If either
+// Herdr context mechanism is present but unusable, fail closed instead of
+// accidentally opening Chatter's own checkout via process.cwd().
+function viewRepoCwd(explicitRepo, rawContext, fallbackCwd) {
+    if (explicitRepo !== undefined)
+        return explicitRepo.trim() || null;
+    if (rawContext !== undefined)
+        return (0, herdr_1.pluginInvocationContext)(rawContext).cwd;
+    return fallbackCwd;
 }
 function initialDbFile() {
-    const rawContext = process.env.HERDR_PLUGIN_CONTEXT_JSON;
-    if (!rawContext)
-        return dbFileForCwd(process.cwd());
-    const cwd = pluginContextCwd(rawContext);
+    const cwd = viewRepoCwd(process.env.CHATTER_REPO_ROOT, process.env.HERDR_PLUGIN_CONTEXT_JSON, process.cwd());
     return cwd ? dbFileForCwd(cwd) : null;
 }
 const repoLabel = (file) => node_path_1.default.basename(node_path_1.default.dirname(file)).replace(/-[0-9a-f]{8}$/, '');

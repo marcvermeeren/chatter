@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildFeedLines, chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd, rosterIdentity,
+  viewRepoCwd,
 } from '../src/board';
+import { pluginInvocationContext } from '../src/herdr';
 import { nextSetupStep } from '../src/setup';
 import { manifestVersion, runUpdate } from '../src/update';
 import {
@@ -99,8 +101,20 @@ test('plugin views require an explicit focused repository context', () => {
   assert.equal(pluginContextCwd('{}'), null);
   assert.equal(pluginContextCwd('not-json'), null);
   assert.equal(pluginContextCwd('{"focused_pane_cwd":"/repo/one"}'), '/repo/one');
-  assert.equal(pluginContextCwd('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/two');
-  assert.equal(pluginContextCwd('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/three');
+  assert.equal(pluginContextCwd('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/one');
+  assert.equal(pluginContextCwd('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/two');
+  assert.deepEqual(pluginInvocationContext(
+    '{"workspace_id":"w4","focused_pane_id":"w4:p2","focused_pane_cwd":"/repo/one"}',
+  ), { workspaceId: 'w4', focusedPaneId: 'w4:p2', cwd: '/repo/one' });
+});
+
+test('explicit pane repository anchors win and invalid plugin context fails closed', () => {
+  const context = '{"focused_pane_cwd":"/repo/context"}';
+  assert.equal(viewRepoCwd('/repo/anchor', context, '/plugin/root'), '/repo/anchor');
+  assert.equal(viewRepoCwd('', context, '/plugin/root'), null);
+  assert.equal(viewRepoCwd(undefined, context, '/plugin/root'), '/repo/context');
+  assert.equal(viewRepoCwd(undefined, '{}', '/plugin/root'), null);
+  assert.equal(viewRepoCwd(undefined, undefined, '/direct/repo'), '/direct/repo');
 });
 
 test('update helpers preserve the manifest and unsupported-source behavior', () => {

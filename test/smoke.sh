@@ -377,16 +377,28 @@ node --no-warnings --experimental-sqlite -e "const c=require('$CHATTER_MODULE_RO
 node --no-warnings --experimental-sqlite -e "const c=require('$CHATTER_MODULE_ROOT/commands.js'); process.exit(typeof c.hookOpenBoardTab === 'function' ? 0 : 1)" \
   && ok "hookOpenBoardTab resolves" || fail "hookOpenBoardTab resolves"
 ACTION_CALLS="$TMP/action-calls.log"; : > "$ACTION_CALLS"
-ACTION_CH="env HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$ACTION_CALLS FAKE_ROSTER=$TMP/roster.json node --no-warnings --experimental-sqlite $CHATTER_ENTRY"
+ACTION_CONTEXT="{\"workspace_id\":\"w1\",\"focused_pane_id\":\"w1:p1\",\"focused_pane_cwd\":\"$REPO\"}"
+ACTION_REPO=$(cd "$REPO" && pwd -P)
+ACTION_CH="env HERDR_PLUGIN_CONTEXT_JSON=$ACTION_CONTEXT HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$ACTION_CALLS FAKE_ROSTER=$TMP/roster.json node --no-warnings --experimental-sqlite $CHATTER_ENTRY"
 $ACTION_CH _open_board >/dev/null 2>&1
 $ACTION_CH _open_board_tab >/dev/null 2>&1
 $ACTION_CH _open_chat >/dev/null 2>&1
 $ACTION_CH _open_chat_tab >/dev/null 2>&1
-grep -qx 'plugin pane open --plugin chatter --entrypoint board' "$ACTION_CALLS" \
-  && grep -qx 'plugin pane open --plugin chatter --entrypoint board --placement tab' "$ACTION_CALLS" \
-  && grep -qx 'plugin pane open --plugin chatter --entrypoint chat' "$ACTION_CALLS" \
-  && grep -qx 'plugin pane open --plugin chatter --entrypoint chat --placement tab' "$ACTION_CALLS" \
-  && ok "pane hooks preserve entrypoint argv and placement" || fail "pane hook argv/placement contract"
+ACTION_REPO_ARG="--env CHATTER_REPO_ROOT=$ACTION_REPO"
+ACTION_TAB_ARGS="--placement tab --workspace w1 $ACTION_REPO_ARG"
+grep -qx "plugin pane open --plugin chatter --entrypoint board $ACTION_REPO_ARG" "$ACTION_CALLS" \
+  && grep -qx "plugin pane open --plugin chatter --entrypoint board $ACTION_TAB_ARGS" "$ACTION_CALLS" \
+  && grep -qx "plugin pane open --plugin chatter --entrypoint chat $ACTION_REPO_ARG" "$ACTION_CALLS" \
+  && grep -qx "plugin pane open --plugin chatter --entrypoint chat $ACTION_TAB_ARGS" "$ACTION_CALLS" \
+  && ok "pane hooks preserve originating repository, workspace, and placement" || fail "pane hook repository/workspace contract"
+BEFORE_ACTION_LINES=$(wc -l < "$ACTION_CALLS")
+BAD_ACTION=$(env HERDR_PLUGIN_CONTEXT_JSON='{}' HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+  FAKE_CALLS="$ACTION_CALLS" FAKE_ROSTER="$TMP/roster.json" \
+  node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" _open_chat 2>&1) && BAD_ACTION_STATUS=0 || BAD_ACTION_STATUS=$?
+AFTER_ACTION_LINES=$(wc -l < "$ACTION_CALLS")
+[ "$BAD_ACTION_STATUS" -eq 1 ] && [ "$BEFORE_ACTION_LINES" -eq "$AFTER_ACTION_LINES" ] \
+  && echo "$BAD_ACTION" | grep -q 'needs an originating repository' \
+  && ok "pane hooks fail closed without repository context" || fail "pane hook missing-context safety"
 
 echo "# unnamed live agent identity"
 UNNAMED_STATE="$TMP/unnamed-state"; UNNAMED_CONFIG="$TMP/unnamed-config"

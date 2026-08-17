@@ -1117,9 +1117,23 @@ function hookFlush() {
 // (session-modal, Esc closes it); tab/split make it a persistent pane the
 // human keeps open beside their work.
 function openPane(entrypoint, placement = null) {
+    const context = (0, herdr_1.pluginInvocationContext)(process.env.HERDR_PLUGIN_CONTEXT_JSON);
+    if (!context.cwd) {
+        (0, util_1.die)('Chatter needs an originating repository; focus a Herdr pane inside a Git repository and try again');
+    }
+    const repoRoot = (0, db_1.gitInfo)(context.cwd).repoRoot;
+    if (!repoRoot) {
+        (0, util_1.die)('Chatter needs an originating repository; focus a Herdr pane inside a Git repository and try again');
+    }
     const args = ['plugin', 'pane', 'open', '--plugin', herdr_1.PLUGIN_ID, '--entrypoint', entrypoint];
     if (placement)
         args.push('--placement', placement);
+    // Herdr popups are attached to the active pane and reject explicit targets;
+    // tabs accept a workspace but reject target-pane. The repository env anchor
+    // is authoritative for both placements even if UI focus changes meanwhile.
+    if (placement === 'tab' && context.workspaceId)
+        args.push('--workspace', context.workspaceId);
+    args.push('--env', `CHATTER_REPO_ROOT=${repoRoot}`);
     const r = (0, herdr_1.herdr)(args);
     if (!r.ok) {
         console.error(r.raw);

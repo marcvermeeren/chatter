@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const strict_1 = __importDefault(require("node:assert/strict"));
 const node_test_1 = __importDefault(require("node:test"));
 const board_1 = require("../src/board");
+const herdr_1 = require("../src/herdr");
 const setup_1 = require("../src/setup");
 const update_1 = require("../src/update");
 const tui_1 = require("../src/tui");
@@ -86,8 +87,17 @@ const tui_1 = require("../src/tui");
     strict_1.default.equal((0, board_1.pluginContextCwd)('{}'), null);
     strict_1.default.equal((0, board_1.pluginContextCwd)('not-json'), null);
     strict_1.default.equal((0, board_1.pluginContextCwd)('{"focused_pane_cwd":"/repo/one"}'), '/repo/one');
-    strict_1.default.equal((0, board_1.pluginContextCwd)('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/two');
-    strict_1.default.equal((0, board_1.pluginContextCwd)('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/three');
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/one');
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/two');
+    strict_1.default.deepEqual((0, herdr_1.pluginInvocationContext)('{"workspace_id":"w4","focused_pane_id":"w4:p2","focused_pane_cwd":"/repo/one"}'), { workspaceId: 'w4', focusedPaneId: 'w4:p2', cwd: '/repo/one' });
+});
+(0, node_test_1.default)('explicit pane repository anchors win and invalid plugin context fails closed', () => {
+    const context = '{"focused_pane_cwd":"/repo/context"}';
+    strict_1.default.equal((0, board_1.viewRepoCwd)('/repo/anchor', context, '/plugin/root'), '/repo/anchor');
+    strict_1.default.equal((0, board_1.viewRepoCwd)('', context, '/plugin/root'), null);
+    strict_1.default.equal((0, board_1.viewRepoCwd)(undefined, context, '/plugin/root'), '/repo/context');
+    strict_1.default.equal((0, board_1.viewRepoCwd)(undefined, '{}', '/plugin/root'), null);
+    strict_1.default.equal((0, board_1.viewRepoCwd)(undefined, undefined, '/direct/repo'), '/direct/repo');
 });
 (0, node_test_1.default)('update helpers preserve the manifest and unsupported-source behavior', () => {
     strict_1.default.match((0, update_1.manifestVersion)(process.cwd()) ?? '', /^\d+\.\d+\.\d+$/);

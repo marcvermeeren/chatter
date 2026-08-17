@@ -23,6 +23,35 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+export interface PluginInvocationContext {
+  workspaceId: string | null;
+  focusedPaneId: string | null;
+  cwd: string | null;
+}
+
+const contextString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim() ? value : null;
+
+// Actions run from the plugin directory, so process.cwd() is not repository
+// context. Keep the originating Herdr pane/workspace data typed in one place.
+export function pluginInvocationContext(rawContext: string | undefined): PluginInvocationContext {
+  if (!rawContext) return { workspaceId: null, focusedPaneId: null, cwd: null };
+  try {
+    const parsed: unknown = JSON.parse(rawContext);
+    if (!isRecord(parsed)) return { workspaceId: null, focusedPaneId: null, cwd: null };
+    const worktree = isRecord(parsed.worktree) ? parsed.worktree : null;
+    return {
+      workspaceId: contextString(parsed.workspace_id),
+      focusedPaneId: contextString(parsed.focused_pane_id),
+      cwd: contextString(parsed.focused_pane_cwd)
+        ?? contextString(parsed.workspace_cwd)
+        ?? contextString(worktree?.checkout_path),
+    };
+  } catch {
+    return { workspaceId: null, focusedPaneId: null, cwd: null };
+  }
+}
+
 function agentStatus(value: unknown): AgentStatus | undefined {
   switch (value) {
     case 'idle': case 'done': case 'working': case 'blocked': case 'unknown': return value;

@@ -3,7 +3,7 @@
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
 
 import path from 'node:path';
-import { matchLive, herdr, isRecord } from './herdr';
+import { matchLive, herdr, pluginInvocationContext } from './herdr';
 import { gitInfo, repoDbFile, openDbFile, humanName } from './db';
 import { postToChat, teamAgents, sendMessage, nameTaken, sanitizeName } from './team';
 import { taskLabel, buildBrief, spawnAgent, setRole } from './commands';
@@ -35,20 +35,28 @@ function dbFileForCwd(cwd: string): string | null {
 }
 
 export function pluginContextCwd(rawContext: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(rawContext);
-    const ctx = isRecord(parsed) ? parsed : {};
-    const worktree = isRecord(ctx.worktree) ? ctx.worktree : null;
-    return typeof worktree?.checkout_path === 'string' ? worktree.checkout_path
-      : typeof ctx.workspace_cwd === 'string' ? ctx.workspace_cwd
-      : typeof ctx.focused_pane_cwd === 'string' ? ctx.focused_pane_cwd : null;
-  } catch { return null; }
+  return pluginInvocationContext(rawContext).cwd;
+}
+
+// An action-opened view receives an immutable repository anchor. If either
+// Herdr context mechanism is present but unusable, fail closed instead of
+// accidentally opening Chatter's own checkout via process.cwd().
+export function viewRepoCwd(
+  explicitRepo: string | undefined,
+  rawContext: string | undefined,
+  fallbackCwd: string,
+): string | null {
+  if (explicitRepo !== undefined) return explicitRepo.trim() || null;
+  if (rawContext !== undefined) return pluginInvocationContext(rawContext).cwd;
+  return fallbackCwd;
 }
 
 function initialDbFile(): string | null {
-  const rawContext = process.env.HERDR_PLUGIN_CONTEXT_JSON;
-  if (!rawContext) return dbFileForCwd(process.cwd());
-  const cwd = pluginContextCwd(rawContext);
+  const cwd = viewRepoCwd(
+    process.env.CHATTER_REPO_ROOT,
+    process.env.HERDR_PLUGIN_CONTEXT_JSON,
+    process.cwd(),
+  );
   return cwd ? dbFileForCwd(cwd) : null;
 }
 
