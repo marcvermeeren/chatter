@@ -25,6 +25,8 @@ on the same repository one group chat. It also adds a roster, direct messages,
 shared memory, lightweight tasks, and structured handoffs. The human
 participates through the same chat and toast notifications.
 
+![Claude Code, Codex, and Pi coordinating in one Herdr repository](assets/chatter-agents.gif)
+
 It has zero runtime package dependencies and runs on Node 22.5 or newer.
 Installation requires no package-manager or build step.
 
@@ -150,7 +152,18 @@ question response time from the append-only activity ledger.
 ## Views
 
 The board is a read-only overview of agents, status, branch, current task,
-recent chat, tasks, questions, and shared memory. Chat is the interactive feed.
+tasks, open questions, and shared memory. Chat is the interactive feed.
+
+<table>
+  <tr>
+    <th>Chat</th>
+    <th>Board</th>
+  </tr>
+  <tr>
+    <td><img src="assets/chat.png" alt="Chatter's repository-scoped group chat"></td>
+    <td><img src="assets/board.png" alt="Chatter's agent and task board"></td>
+  </tr>
+</table>
 
 ```sh
 herdr plugin action invoke chatter.open-chat       # popup
