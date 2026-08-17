@@ -60,10 +60,12 @@ function main(): void {
   }
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    const helpArgs = cmd ? raw.slice(1) : [];
+    if (helpArgs.some((arg) => arg !== '--all')) die('usage: chatter help [--all]');
     // Block art for a human at a terminal only: agents pipe `chatter help`
     // constantly, and a logo in their context window is pure token noise.
     if (process.stdout.isTTY) console.log(s.logoLines(process.stdout.columns || 100).join('\n'));
-    console.log(c.help());
+    console.log(c.help(helpArgs.includes('--all')));
     return;
   }
 

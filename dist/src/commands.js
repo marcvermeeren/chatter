@@ -916,10 +916,34 @@ function cmdRole(me, args) {
         process.exit(1);
 }
 // -------------------------------------------------------------------- help
-function help() {
-    const g = (0, db_1.gitInfo)();
-    const dbPath = g.repoRoot ? (0, db_1.repoDbFile)(g.repoRoot) : `${(0, db_1.stateRoot)()}/repos/<repo>/chatter.db`;
-    return `chatter — group chat, DMs, tasks and shared memory for this repo's coding agents
+function help(all = false) {
+    if (!all)
+        return `chatter — repo-scoped coordination for coding agents
+
+Common coordination:
+  chatter agents                         roster, status and current task
+  chatter send <agent> <message...>      private message
+  chatter post <text...>                 group chat; @name pushes
+  chatter inbox [--all]                  unread private messages / history
+  chatter note <text> [--type TYPE]      record a discovery, decision or dead end
+  chatter notes [query] [--task TASK-n]  search shared memory
+  chatter ask [agent] <question...>      open a question
+  chatter answer <id> <text...>          answer one
+  chatter task create|list|assign|done   lightweight ownership
+  chatter handoff <TASK-n> <agent> --summary "..."
+  chatter handoff show <id>              read a structured handoff
+  chatter brief [today|2h|30m]           catch up on changes
+
+Human workflows:
+  chatter spawn <name> [--kind k] [--purpose "..."]
+  chatter setup --yes · chatter doctor · chatter update [--check]
+
+Open chat:  prefix+alt+c popup · prefix+alt+t tab
+Open board: prefix+alt+b popup · prefix+alt+shift+b tab
+
+Chatter carries context inside this repo; Git carries code between worktrees.
+Full command and placement reference: chatter help --all`;
+    return `chatter — repo-scoped chat, shared memory, tasks and handoffs for coding agents
 
   chatter agents [--all]                who's online: role, branch, task (--all incl. departed)
   chatter send <agent> <message...>     DM an agent (lands in their session; --queue for absent agents)
@@ -949,6 +973,7 @@ function help() {
   chatter whoami
   chatter iam <name>                    set the human's chat name (human only)
   chatter update [--check]              bring this machine's chatter up to date (human only)
+  chatter help [--all]                  concise guide / complete reference
 
 Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
 them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
@@ -964,9 +989,7 @@ shared within this repo (all its worktrees). Record dead-ends (--type
 dead-end) so teammates don't repeat failed investigations. Answer open
 questions before they go stale.
 
-Most read commands accept --json. Raw history: query the SQLite DB directly at
-${dbPath}
-(tables: agents, messages, notes, tasks, handoffs, chat_reads).
+Most read commands accept --json. chatter data reports local stored data.
 
 Code moves through Git (commit/branch refs in handoffs) — never edit another
 agent's worktree. Chatter carries context, Git carries code.`;
