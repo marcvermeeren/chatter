@@ -11,7 +11,9 @@ export HERDR_BIN_PATH="/nonexistent-herdr"   # forces empty live roster
 unset HERDR_PANE_ID || true                  # caller is the human
 mkdir -p "$HERDR_PLUGIN_STATE_DIR" "$HERDR_PLUGIN_CONFIG_DIR"
 
-CH="node --no-warnings $ROOT/bin/chatter.js"
+CHATTER_ENTRY="${CHATTER_ENTRY:-$ROOT/bin/chatter.js}"
+CHATTER_MODULE_ROOT="${CHATTER_MODULE_ROOT:-$ROOT/src}"
+CH="node --no-warnings $CHATTER_ENTRY"
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok   - $1"; }
 fail() { FAIL=$((FAIL+1)); echo "  FAIL - $1"; }
@@ -36,6 +38,19 @@ QID=$($CH questions --json | node -e "console.log(JSON.parse(require('fs').readF
 check "question answered"              $CH answer "$QID" "not much"
 $CH agents --json | node -e "JSON.parse(require('fs').readFileSync(0))" && ok "--json parses" || fail "--json parses"
 $CH stats >/dev/null 2>&1 && ok "stats runs" || fail "stats runs"
+
+echo "# inbox + note lifecycle"
+BASIC_DB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)
+sqlite3 "$BASIC_DB" "INSERT INTO messages (from_agent,to_agent,body,kind,created_at) VALUES ('sender','tester','inbox contract','chat','2026-01-01 00:00:00')"
+$CH inbox --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); if(r.length!==1||r[0].body!=='inbox contract') process.exit(1)" \
+  && ok "inbox --json returns unread mail" || fail "inbox --json returns unread mail"
+$CH inbox | grep -q "no unread messages" && ok "reading inbox marks mail read" || fail "reading inbox marks mail read"
+$CH inbox --all | grep -q "inbox contract" && ok "inbox --all keeps history" || fail "inbox --all keeps history"
+RESOLVE_OUT=$($CH note "resolve lifecycle")
+RESOLVE_ID=$(echo "$RESOLVE_OUT" | sed -n 's/^note #\([0-9][0-9]*\) saved$/\1/p')
+$CH resolve "$RESOLVE_ID" | grep -q "marked superseded" && ok "resolve supersedes an active note" || fail "resolve supersedes an active note"
+$CH notes "resolve lifecycle" | grep -q "no notes matching" && ok "resolved note leaves active search" || fail "resolved note leaves active search"
+$CH notes "resolve lifecycle" --all | grep -q "superseded" && ok "resolved note remains in all history" || fail "resolved note remains in all history"
 
 echo "# H2: 20 parallel task creates -> 20 unique ids, zero failures"
 i=1; while [ $i -le 20 ]; do $CH task create "concurrent $i" >/dev/null 2>&1 & i=$((i+1)); done; wait
@@ -118,7 +133,7 @@ EOF
 ADB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/repo-a-*/chatter.db)
 sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,cwd,repo_root,registered_at,last_seen_at) VALUES ('moved','w1:p3','$REPO','$REPO','x','x')"
 cd "$REPO"
-CHF="env HERDR_BIN_PATH=$ROOT/test/fake-herdr node --no-warnings $ROOT/bin/chatter.js"
+CHF="env HERDR_BIN_PATH=$ROOT/test/fake-herdr node --no-warnings $CHATTER_ENTRY"
 OUT=$($CHF agents)
 echo "$OUT" | grep -q "alpha" && ok "roster shows in-repo live agent" || fail "roster shows in-repo live agent"
 echo "$OUT" | grep -q "beta" && fail "roster leaks other repo's agent" || ok "roster excludes other repo's agent"
@@ -130,11 +145,36 @@ grep -q "agent prompt" "$FAKE_CALLS" && fail "H1 REGRESSION: injected into moved
 : > "$FAKE_CALLS"
 $CHF send alpha "hi" 2>/dev/null | grep -q delivered && ok "send to in-repo agent delivers" || fail "send to in-repo agent delivers"
 grep -q "agent prompt w1:p1" "$FAKE_CALLS" && ok "prompt went to alpha's pane" || fail "prompt went to alpha's pane"
+BLOCKED_ROSTER="$TMP/blocked-roster.json"
+cat > "$BLOCKED_ROSTER" <<EOF
+{"result":{"agents":[
+  {"name":"alpha","pane_id":"w1:p1","agent_status":"blocked","agent":"claude","workspace_id":"w1","cwd":"$REPO"}
+]}}
+EOF
+: > "$FAKE_CALLS"
+FAKE_ROSTER="$BLOCKED_ROSTER" $CHF send alpha "wait for approval" 2>/dev/null | grep -q queued \
+  && ok "blocked target queues delivery" || fail "blocked target queues delivery"
+grep -q "agent prompt" "$FAKE_CALLS" && fail "blocked target was prompted" || ok "blocked target is never prompted"
+$CHF _flush >/dev/null 2>&1
+grep -q "agent prompt w1:p1" "$FAKE_CALLS" && ok "flush delivers after target settles" || fail "flush delivers after target settles"
 : > "$FAKE_CALLS"
 $CHF post "@everyone hello" >/dev/null 2>&1
 grep -c "agent prompt" "$FAKE_CALLS" | grep -qx "1" && grep -q "agent prompt w1:p1" "$FAKE_CALLS" \
   && ok "@everyone reaches only this repo's team" || fail "@everyone crossed the repo boundary"
 $CHF brief 1h 2>/dev/null | grep -q "agents: 1 idle" && ok "brief counts this repo's team only" || fail "brief counts this repo's team only"
+
+echo "# task transitions + structured handoff"
+FLOW_ID=$($CHF task create "handoff contract" | awk '{print $1}')
+$CHF task assign "$FLOW_ID" alpha >/dev/null 2>&1
+$CHF task list --json | FLOW_ID="$FLOW_ID" node -e "const r=JSON.parse(require('fs').readFileSync(0)); const t=r.find(x=>x.id===process.env.FLOW_ID); if(!t||t.assignee!=='alpha'||t.status!=='in_progress') process.exit(1)" \
+  && ok "task assign updates owner and status" || fail "task assign updates owner and status"
+HANDOFF_OUT=$($CHF handoff "$FLOW_ID" alpha --summary "continue the migration" --branch agents/alpha --commit abcdef123456 --files src/a.js,src/b.js --tests "sh test/smoke.sh" --next "finish it")
+HANDOFF_ID=$(echo "$HANDOFF_OUT" | sed -n 's/^h\([0-9][0-9]*\) created.*/\1/p')
+$CHF handoff show "$HANDOFF_ID" | FLOW_ID="$FLOW_ID" node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.task!==process.env.FLOW_ID||h.to!=='alpha'||h.summary!=='continue the migration'||h.files.length!==2||h.status!=='pending') process.exit(1)" \
+  && ok "handoff show preserves structured payload" || fail "handoff show preserves structured payload"
+$CHF task done "$FLOW_ID" --commit fedcba987654 >/dev/null 2>&1
+$CHF handoff show "$HANDOFF_ID" | node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.status!=='done') process.exit(1)" \
+  && ok "task completion closes its handoff" || fail "task completion closes its handoff"
 echo "# spawn v2: worktree default, --tab explicit"
 : > "$FAKE_CALLS"
 OUT=$($CHF spawn helper2 --kind pi 2>&1)
@@ -168,16 +208,16 @@ $CHF role alpha "Data / API" >/dev/null 2>&1
 grep -q "pane rename w1:p1 Data / API" "$FAKE_CALLS" && ok "role renames the pane through herdr" || fail "role renames the pane"
 $CHF agents | grep -q "Data / API · @alpha" && ok "roster shows display · @handle" || fail "roster shows display · @handle"
 # 'moved' is registered in repo A, so it resolves — the permission check must fire.
-ROLE_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$ROOT/bin/chatter.js" role moved "Sneaky retitle" 2>&1)
+ROLE_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$CHATTER_ENTRY" role moved "Sneaky retitle" 2>&1)
 echo "$ROLE_OUT" | grep -q "only set their own" && ok "agent cannot retitle a teammate" || fail "agent retitle not blocked: $ROLE_OUT"
 # Cross-repo target refused even earlier, by the boundary itself.
-ROLE_OUT2=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$ROOT/bin/chatter.js" role beta "x" 2>&1)
+ROLE_OUT2=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings "$CHATTER_ENTRY" role beta "x" 2>&1)
 echo "$ROLE_OUT2" | grep -q "no agent" && ok "cross-repo retitle blocked by the boundary" || fail "cross-repo retitle: $ROLE_OUT2"
 echo "# departure: reap, forget, and departed exclusion"
 $CHF send moved "will be stuck" --queue >/dev/null 2>&1
 env HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w1:p3"}' HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
   FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" HERDR_PLUGIN_STATE_DIR="$HERDR_PLUGIN_STATE_DIR" \
-  node --no-warnings "$ROOT/bin/chatter.js" _reap | grep -q "departed" && ok "_reap marks the closed pane's agent departed" || fail "_reap marks departed"
+  node --no-warnings "$CHATTER_ENTRY" _reap | grep -q "departed" && ok "_reap marks the closed pane's agent departed" || fail "_reap marks departed"
 $CHF agents | grep -q "moved" && fail "departed agent still in default roster" || ok "departed agent hidden from roster"
 $CHF agents --all | grep "moved" | grep -q "departed" && ok "--all shows it as departed" || fail "--all shows departed"
 $CHF send moved "hi again" >/dev/null 2>&1 && fail "send to departed accepted without --queue" || ok "send to departed refused"
@@ -187,7 +227,7 @@ $CHF brief 1h | grep -q "queued for departed" && fail "stuck-mail flag persists 
 # Workspace-level teardown (worktree.removed carries only the workspace id) —
 # and one closed pane must never reap the whole workspace.
 sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,registered_at,last_seen_at) VALUES ('gamma','w7:p1','x','x'),('delta','w7:p2','x','x')"
-REAP="env HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$FAKE_CALLS FAKE_ROSTER=$FAKE_ROSTER HERDR_PLUGIN_STATE_DIR=$HERDR_PLUGIN_STATE_DIR node --no-warnings $ROOT/bin/chatter.js _reap"
+REAP="env HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$FAKE_CALLS FAKE_ROSTER=$FAKE_ROSTER HERDR_PLUGIN_STATE_DIR=$HERDR_PLUGIN_STATE_DIR node --no-warnings $CHATTER_ENTRY _reap"
 env HERDR_PLUGIN_EVENT="pane.closed" HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w7:p1","workspace_id":"w7"}' $REAP >/dev/null
 G=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='gamma'")
 D=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delta'")
@@ -199,9 +239,9 @@ D2=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delt
 unset FAKE_CALLS FAKE_ROSTER
 
 echo "# human-only gates"
-HP_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$ROOT/bin/chatter.js" purge --all --yes 2>&1)
+HP_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$CHATTER_ENTRY" purge --all --yes 2>&1)
 echo "$HP_OUT" | grep -q "human-only" && ok "agent cannot purge" || fail "agent purge not blocked: $HP_OUT"
-HI_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$ROOT/bin/chatter.js" iam evil 2>&1)
+HI_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" node --no-warnings "$CHATTER_ENTRY" iam evil 2>&1)
 echo "$HI_OUT" | grep -q "human-only" && ok "agent cannot change human identity" || fail "agent iam not blocked: $HI_OUT"
 ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db >/dev/null 2>&1 && ok "universes survived blocked purge" || fail "universes survived blocked purge"
 
@@ -225,7 +265,7 @@ echo "$HELP_OUT" | grep -q "chatter agents" && ok "piped help still lists comman
 echo "# CLI spawn streams its stages"
 : > "$TMP/herdr-calls.log"
 SPAWN_OUT=$(env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" \
-  node --no-warnings "$ROOT/bin/chatter.js" spawn helper6 --kind pi 2>&1)
+  node --no-warnings "$CHATTER_ENTRY" spawn helper6 --kind pi 2>&1)
 S_LINE=$(echo "$SPAWN_OUT" | grep -n "starting" | head -1 | cut -d: -f1)
 U_LINE=$(echo "$SPAWN_OUT" | grep -n "is up" | head -1 | cut -d: -f1)
 [ -n "$S_LINE" ] && [ -n "$U_LINE" ] && [ "$S_LINE" -lt "$U_LINE" ] \
@@ -234,7 +274,7 @@ U_LINE=$(echo "$SPAWN_OUT" | grep -n "is up" | head -1 | cut -d: -f1)
 
 echo "# header: numbered universe tabs only where number keys work (board)"
 node -e "
-const { headerBar } = require('$ROOT/src/board.js');
+const { headerBar } = require('$CHATTER_MODULE_ROOT/board.js');
 const strip = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 const files = ['/s/repos/alpha-11111111/chatter.db', '/s/repos/beta-22222222/chatter.db'];
 const chat = strip(headerBar(files[0], 80));
@@ -245,9 +285,9 @@ if (!board.includes('[1 alpha]') || !board.includes('[2 beta]')) process.exit(1)
 
 echo "# chat-in-a-tab placement"
 grep -q 'id = "open-chat-tab"' "$ROOT/herdr-plugin.toml" && ok "manifest declares open-chat-tab" || fail "manifest declares open-chat-tab"
-grep -q '_open_chat_tab' "$ROOT/herdr-plugin.toml" && grep -q '_open_chat_tab' "$ROOT/bin/chatter.js" \
+grep -q '_open_chat_tab' "$ROOT/herdr-plugin.toml" && grep -q '_open_chat_tab' "$CHATTER_ENTRY" \
   && ok "_open_chat_tab dispatch is wired" || fail "_open_chat_tab dispatch is wired"
-node -e "const c=require('$ROOT/src/commands.js'); process.exit(typeof c.hookOpenChatTab === 'function' ? 0 : 1)" \
+node -e "const c=require('$CHATTER_MODULE_ROOT/commands.js'); process.exit(typeof c.hookOpenChatTab === 'function' ? 0 : 1)" \
   && ok "hookOpenChatTab resolves" || fail "hookOpenChatTab resolves"
 
 echo "# spawn (failure path — no herdr available here)"
@@ -278,7 +318,7 @@ console.log(`ok=${r.ok} ${r.lines.join(' | ')}`);
 JS
 updrun() { # updrun <sourceJSON> <root> <check 0|1>
   env HOME="$UPDHOME" HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$UPDCALLS" \
-    UPD_SRC="$ROOT/src/update.js" UPD_SOURCE="$1" UPD_ROOT="$2" UPD_CHECK="$3" \
+    UPD_SRC="$CHATTER_MODULE_ROOT/update.js" UPD_SOURCE="$1" UPD_ROOT="$2" UPD_CHECK="$3" \
     node --no-warnings "$TMP/upd.js" 2>&1
 }
 
@@ -329,13 +369,13 @@ cat > "$TMP/plugins-local.json" <<EOF
 {"result":{"plugins":[{"plugin_id":"chatter","version":"0.2.0","plugin_root":"$UPD/root","source":{"kind":"local"}}]}}
 EOF
 UPDCLI="env HOME=$UPDHOME HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$UPDCALLS FAKE_ROSTER=$TMP/roster.json FAKE_PLUGINS=$TMP/plugins-local.json"
-$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" update --check 2>&1 | grep -q "up to date" \
+$UPDCLI node --no-warnings "$CHATTER_ENTRY" update --check 2>&1 | grep -q "up to date" \
   && ok "chatter update --check runs off the registry" || fail "chatter update --check off the registry"
-AG_OUT=$(HERDR_PANE_ID=w1:p1 $UPDCLI node --no-warnings "$ROOT/bin/chatter.js" update 2>&1)
+AG_OUT=$(HERDR_PANE_ID=w1:p1 $UPDCLI node --no-warnings "$CHATTER_ENTRY" update 2>&1)
 echo "$AG_OUT" | grep -q "human-only" && ok "agents cannot update the plugin" || fail "agent update not blocked: $AG_OUT"
-$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" doctor 2>&1 | grep -q "chatter is up to date" \
+$UPDCLI node --no-warnings "$CHATTER_ENTRY" doctor 2>&1 | grep -q "chatter is up to date" \
   && ok "doctor reports update state as a note" || fail "doctor reports update state"
-$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" help | grep -q "chatter update" \
+$UPDCLI node --no-warnings "$CHATTER_ENTRY" help | grep -q "chatter update" \
   && ok "help documents update" || fail "help documents update"
 
 echo "# setup --yes + doctor"
@@ -386,6 +426,8 @@ echo "# help documents how to open the chat"
 $CH help | grep -q "chatter.open-chat-tab" && ok "help names the tab action" || fail "help names the tab action"
 $CH help | grep -q "placement split" && ok "help names --placement split" || fail "help names --placement split"
 $CH help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
+CHATTER_ENTRY="$CHATTER_ENTRY" CHATTER_SOURCE_ENTRY="$CHATTER_ENTRY" node "$ROOT/test/surface.js" >/dev/null \
+  && ok "public command/hook/manifest surface is complete" || fail "public command/hook/manifest surface is complete"
 
 echo
 echo "$PASS passed, $FAIL failed"
