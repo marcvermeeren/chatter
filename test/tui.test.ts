@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chatEscapeAction, headerBar, nextWizardStep } from '../src/board';
+import { chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd } from '../src/board';
 import { nextSetupStep } from '../src/setup';
 import { manifestVersion, runUpdate } from '../src/update';
 import { clean, decodeKey, stripAnsi, visWidth, wrap } from '../src/tui';
@@ -41,10 +41,18 @@ test('Escape closes popups but only unwinds or hints in persistent chat panes', 
   assert.equal(chatEscapeAction(true, { wizard: true }), 'cancel-wizard');
 });
 
-test('chat header omits inactive universe tabs', () => {
-  const files = ['/state/repos/alpha-11111111/chatter.db', '/state/repos/beta-22222222/chatter.db'];
-  assert.doesNotMatch(stripAnsi(headerBar(files[0]!, 80)), /\[1 alpha\]/);
-  assert.match(stripAnsi(headerBar(files[0]!, 80, files)), /\[1 alpha\]/);
+test('view header names only its repository', () => {
+  const header = stripAnsi(headerBar('/state/repos/alpha-11111111/chatter.db', 80));
+  assert.match(header, /#alpha/);
+  assert.doesNotMatch(header, /\[\d+ /);
+});
+
+test('plugin views require an explicit focused repository context', () => {
+  assert.equal(pluginContextCwd('{}'), null);
+  assert.equal(pluginContextCwd('not-json'), null);
+  assert.equal(pluginContextCwd('{"focused_pane_cwd":"/repo/one"}'), '/repo/one');
+  assert.equal(pluginContextCwd('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/two');
+  assert.equal(pluginContextCwd('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/three');
 });
 
 test('update helpers preserve the manifest and unsupported-source behavior', () => {

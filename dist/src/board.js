@@ -37,12 +37,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdChatView = exports.cmdBoard = void 0;
+exports.pluginContextCwd = pluginContextCwd;
 exports.headerBar = headerBar;
 exports.nextWizardStep = nextWizardStep;
 exports.chatEscapeAction = chatEscapeAction;
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
-const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const herdr_1 = require("./herdr");
 const db_1 = require("./db");
@@ -58,35 +58,35 @@ function identityColored(name, role) {
     return `${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
 }
 const padVis = (s, w) => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
-// ------------------------------------------------------------ repo selection
-function initialDbFile() {
-    // The focused workspace's repo wins — and if its universe doesn't exist
-    // yet, create it (empty) rather than silently showing another repo's chat.
+// ------------------------------------------------------------- repo context
+function dbFileForCwd(cwd) {
+    const g = (0, db_1.gitInfo)(cwd);
+    if (!g.repoRoot)
+        return null;
+    const file = (0, db_1.repoDbFile)(g.repoRoot);
+    (0, db_1.openDbFile)(file).prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
+    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
+    return file;
+}
+function pluginContextCwd(rawContext) {
     try {
-        const parsed = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || '{}');
+        const parsed = JSON.parse(rawContext);
         const ctx = (0, herdr_1.isRecord)(parsed) ? parsed : {};
         const worktree = (0, herdr_1.isRecord)(ctx.worktree) ? ctx.worktree : null;
-        const cwd = typeof worktree?.checkout_path === 'string' ? worktree.checkout_path
+        return typeof worktree?.checkout_path === 'string' ? worktree.checkout_path
             : typeof ctx.workspace_cwd === 'string' ? ctx.workspace_cwd
                 : typeof ctx.focused_pane_cwd === 'string' ? ctx.focused_pane_cwd : null;
-        if (cwd) {
-            const g = (0, db_1.gitInfo)(cwd);
-            if (g.repoRoot) {
-                const file = (0, db_1.repoDbFile)(g.repoRoot);
-                (0, db_1.openDbFile)(file).prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
-          ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
-                return file;
-            }
-        }
     }
-    catch { /* fall through */ }
-    // CLI path: the caller's own shell cwd is legitimate context.
-    const g = (0, db_1.gitInfo)(process.cwd());
-    if (g.repoRoot && node_fs_1.default.existsSync((0, db_1.repoDbFile)(g.repoRoot)))
-        return (0, db_1.repoDbFile)(g.repoRoot);
-    // Fail closed: never silently show some other repo's universe —
-    // the human picks explicitly instead.
-    return null;
+    catch {
+        return null;
+    }
+}
+function initialDbFile() {
+    const rawContext = process.env.HERDR_PLUGIN_CONTEXT_JSON;
+    if (!rawContext)
+        return dbFileForCwd(process.cwd());
+    const cwd = pluginContextCwd(rawContext);
+    return cwd ? dbFileForCwd(cwd) : null;
 }
 const repoLabel = (file) => node_path_1.default.basename(node_path_1.default.dirname(file)).replace(/-[0-9a-f]{8}$/, '');
 // ------------------------------------------------------------------- helpers
@@ -98,16 +98,8 @@ function highlightMentions(line, human) {
         ? `${T.INV}@${n}${T.RESET}`
         : `${T.fg(T.authorHue(n))}${T.BOLD}@${n}${T.RESET}`);
 }
-// The numbered universe tabs are only drawn where the number keys actually
-// switch repos — the board. In the chat view digits are typing, so tabs there
-// would look addressable without being addressable.
-function headerBar(file, width, files = null) {
-    const active = (f) => f === file;
-    const tabs = files && files.length > 1
-        ? files.map((f, i) => active(f) ? `${T.BOLD}[${i + 1} ${repoLabel(f)}]${T.RESET}${T.bg(236)}` : `[${i + 1} ${repoLabel(f)}]`).join(' ')
-        : '';
-    const left = ` ${T.BOLD}#${repoLabel(file)}${T.RESET}${T.bg(236)}`;
-    const raw = `${left}   ${T.CHROME}${tabs}`;
+function headerBar(file, width) {
+    const raw = ` ${T.BOLD}#${repoLabel(file)}${T.RESET}${T.bg(236)}`;
     const fill = Math.max(0, width - T.visWidth(raw));
     return `${T.bg(236)}${raw}${' '.repeat(fill)}${T.RESET}`;
 }
@@ -245,7 +237,7 @@ function handleError(w) {
     const taken = (0, team_1.nameTaken)(p.handle);
     return taken ? `"${p.handle}" is ${taken} — pick another` : '';
 }
-function renderWizard(_d, file, _files, ui) {
+function renderWizard(_d, file, ui) {
     const width = process.stdout.columns || 100;
     const height = process.stdout.rows || 30;
     const w = ui.wizard;
@@ -490,10 +482,10 @@ function wizardKey(key, d, ui, paint) {
     }
     return paint();
 }
-function renderChat(d, file, files, ui) {
+function renderChat(d, file, ui) {
     if (ui.wizard)
-        return renderWizard(d, file, files, ui);
-    return renderFeed(d, file, files, ui);
+        return renderWizard(d, file, ui);
+    return renderFeed(d, file, ui);
 }
 // Nothing said yet: the wordmark plus the three things worth knowing.
 function welcomeLines(width, feedH) {
@@ -504,7 +496,7 @@ function welcomeLines(width, feedH) {
     const rows = T.visWidth(one) <= width ? [one] : [T.hint(...parts.slice(0, 2)), T.hint(...parts.slice(2))];
     return ['', ...logo, ...rows];
 }
-function renderFeed(d, file, _files, ui) {
+function renderFeed(d, file, ui) {
     const width = process.stdout.columns || 100;
     const height = process.stdout.rows || 30;
     const human = (0, db_1.humanName)();
@@ -639,7 +631,7 @@ function runSlash(body, d, ui, _paint) {
         ] };
 }
 // -------------------------------------------------------------------- board
-function renderBoard(d, file, files) {
+function renderBoard(d, file) {
     const width = process.stdout.columns || 100;
     const height = process.stdout.rows || 30;
     const live = (0, team_1.teamAgents)(d, { fresh: true });
@@ -650,7 +642,7 @@ function renderBoard(d, file, files) {
     const taskBy = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress' && t.assignee).map((t) => [t.assignee, t]));
     const openQ = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get()?.n ?? 0;
     const dot = { idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK, unknown: T.FAINT, offline: T.FAINT };
-    const out = [headerBar(file, width, files)];
+    const out = [headerBar(file, width)];
     if (openQ)
         out.push(` ${T.YELLOW}${openQ} open question${openQ > 1 ? 's' : ''}${T.RESET}`);
     out.push('', ` ${T.BOLD}Agents${T.RESET}`);
@@ -677,7 +669,7 @@ function renderBoard(d, file, files) {
         out.push(`   ${T.FAINT}(empty)${T.RESET}`);
     for (const n of notes)
         out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${T.clean(n.text)}`.slice(0, width + 60));
-    out.push('', T.hint('1-9 switch repo', 'q closes'));
+    out.push('', T.hint('q closes'));
     return out.slice(0, height);
 }
 // ----------------------------------------------------------------- run loop
@@ -698,27 +690,23 @@ function openPointerFor(d) {
     return (row && row.last_read_id) || 0;
 }
 function runView(render, { input = false } = {}) {
-    let files = (0, db_1.listRepoDbFiles)();
-    let file = initialDbFile();
-    let d = file ? (0, db_1.openDbFile)(file) : null;
+    const file = initialDbFile();
+    const d = file ? (0, db_1.openDbFile)(file) : null;
     const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0, wizard: null };
     // Pane entrypoints in tab/split mode get HERDR_PANE_ID; the popup does not.
     // A pane the human placed on purpose must not vanish on a stray Esc.
     const persistent = input && !!process.env.HERDR_PANE_ID;
-    const pickerScreen = () => [
+    const noRepoScreen = () => [
         ` ${T.BOLD}chatter${T.RESET}`,
         '',
-        ` ${T.FAINT}no repository context — this workspace isn't a git repo (or has no focused repo).${T.RESET}`,
-        files.length ? ` ${T.FAINT}pick a stored universe:${T.RESET}` : ` ${T.FAINT}no stored universes yet — run a chatter command inside a git repo first.${T.RESET}`,
+        ` ${T.FAINT}no repository context${T.RESET}`,
+        ` ${T.FAINT}focus a Herdr workspace inside a Git repository, then reopen Chatter.${T.RESET}`,
         '',
-        ...files.map((f, i) => `   ${T.BOLD}${i + 1}${T.RESET}  #${repoLabel(f)}`),
-        '',
-        T.hint('1-9 opens', 'Esc closes'),
+        T.hint('q closes', 'Esc closes'),
     ];
     const paint = () => {
-        files = (0, db_1.listRepoDbFiles)();
         if (!d || !file) {
-            painter(pickerScreen());
+            painter(noRepoScreen());
             return;
         }
         if (input) {
@@ -730,7 +718,7 @@ function runView(render, { input = false } = {}) {
                     set.add(a.name);
             ui.names = [...set].sort();
         }
-        painter(render(d, file, files, ui));
+        painter(render(d, file, ui));
     };
     const painter = T.makePainter();
     const scroll = (delta) => {
@@ -767,22 +755,10 @@ function runView(render, { input = false } = {}) {
                 }
                 return paint();
             }
-            // No repo selected yet: picker mode for every view (explicit choice only).
+            // A view without repository context never falls back to stored data.
             if (!d) {
-                if (key.type === 'text') {
-                    if (key.text === 'q')
-                        process.exit(0);
-                    const n = parseInt(key.text, 10);
-                    if (n >= 1 && n <= files.length) {
-                        const selected = files[n - 1];
-                        if (selected) {
-                            file = selected;
-                            d = (0, db_1.openDbFile)(selected);
-                            ui.openPointer = openPointerFor(d);
-                            paint();
-                        }
-                    }
-                }
+                if (key.type === 'text' && key.text === 'q')
+                    process.exit(0);
                 return;
             }
             // The wizard owns the whole view (and the keyboard) while it is up.
@@ -790,20 +766,8 @@ function runView(render, { input = false } = {}) {
                 return wizardKey(key, d, ui, paint);
             const page = Math.max(3, (process.stdout.rows || 30) - 6);
             if (!input) {
-                if (key.type === 'text') {
-                    if (key.text === 'q')
-                        process.exit(0);
-                    const n = parseInt(key.text, 10);
-                    if (n >= 1 && n <= files.length && files[n - 1] !== file) {
-                        const selected = files[n - 1];
-                        if (selected) {
-                            file = selected;
-                            d = (0, db_1.openDbFile)(selected);
-                            ui.openPointer = openPointerFor(d);
-                            paint();
-                        }
-                    }
-                }
+                if (key.type === 'text' && key.text === 'q')
+                    process.exit(0);
                 return;
             }
             switch (key.type) {

@@ -104,10 +104,9 @@ The chat window (`ctrl+b alt+c` once keybound):
 Stable per-author colors, grouped messages with word wrap, date and `── new ──`
 separators, local timestamps, `@mention` highlighting, a fixed input bar with
 `@`-completion (Tab) and post feedback (`✓ pushed to codex`), scrollable
-history, flicker-free rendering. The header names only the repo you're in —
-the chat view never shows numbered universe tabs, because in the chat view
-digits are typing, and a tab you can't press is worse than no tab. An empty
-chat greets you with the wordmark and where to start.
+history, flicker-free rendering. Every view stays with the focused repository
+and names only that repository in its header. An empty chat greets you with
+the wordmark and where to start.
 
 ---
 
@@ -274,16 +273,17 @@ fields to maintain — purpose lives in names the human already gave.
   `/clear`.
 - `--entrypoint board`: read-only overview — agents with live status dots,
   role, branch, and current task; recent chat; tasks; shared memory.
-- Both follow the focused workspace's repo. The board switches repos with
-  number keys and shows a numbered tab per universe; the chat view stays on
-  its own repo (digits there are typing) and shows only its repo name.
+- Both belong exclusively to the focused workspace's repository. They never
+  fall back to or navigate into another repository's stored data; without a
+  focused Git repository they show a clear no-context state.
 
 **Placement.** Views open as a session-modal popup by default. Pass
 `--placement tab` or `--placement split` to keep one open beside your work:
 
 ```sh
-herdr plugin pane open --plugin chatter --entrypoint chat --placement tab
-herdr plugin action invoke chatter.open-chat-tab   # same thing, as an action
+herdr plugin action invoke chatter.open-board                         # popup
+herdr plugin pane open --plugin chatter --entrypoint board --placement tab
+herdr plugin pane open --plugin chatter --entrypoint chat --placement split
 ```
 
 A persistent pane outlives Esc: there, Esc only cancels whatever is open (a

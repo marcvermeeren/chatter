@@ -303,16 +303,13 @@ U_LINE=$(echo "$SPAWN_OUT" | grep -n "is up" | head -1 | cut -d: -f1)
   && ok "spawn prints a 'starting' stage before 'is up' ($S_LINE < $U_LINE)" \
   || fail "spawn progress not streamed (starting=$S_LINE up=$U_LINE)"
 
-echo "# header: numbered universe tabs only where number keys work (board)"
+echo "# views stay locked to one repository"
 node --no-warnings --experimental-sqlite -e "
 const { headerBar } = require('$CHATTER_MODULE_ROOT/board.js');
 const strip = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-const files = ['/s/repos/alpha-11111111/chatter.db', '/s/repos/beta-22222222/chatter.db'];
-const chat = strip(headerBar(files[0], 80));
-const board = strip(headerBar(files[0], 80, files));
-if (!chat.includes('#alpha') || chat.includes('[1 ')) process.exit(1);   // chat: repo name only
-if (!board.includes('[1 alpha]') || !board.includes('[2 beta]')) process.exit(1);
-" && ok "chat header is repo-only, board keeps its tabs" || fail "chat header is repo-only, board keeps its tabs"
+const header = strip(headerBar('/s/repos/alpha-11111111/chatter.db', 80));
+if (!header.includes('#alpha') || header.includes('[1 ')) process.exit(1);
+" && ok "board and chat headers show only their repository" || fail "view header leaked repository navigation"
 
 echo "# chat-in-a-tab placement"
 grep -q 'id = "open-chat-tab"' "$ROOT/herdr-plugin.toml" && ok "manifest declares open-chat-tab" || fail "manifest declares open-chat-tab"

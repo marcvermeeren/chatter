@@ -40,10 +40,17 @@ const tui_1 = require("../src/tui");
     strict_1.default.equal((0, board_1.chatEscapeAction)(true), 'persistent-hint');
     strict_1.default.equal((0, board_1.chatEscapeAction)(true, { wizard: true }), 'cancel-wizard');
 });
-(0, node_test_1.default)('chat header omits inactive universe tabs', () => {
-    const files = ['/state/repos/alpha-11111111/chatter.db', '/state/repos/beta-22222222/chatter.db'];
-    strict_1.default.doesNotMatch((0, tui_1.stripAnsi)((0, board_1.headerBar)(files[0], 80)), /\[1 alpha\]/);
-    strict_1.default.match((0, tui_1.stripAnsi)((0, board_1.headerBar)(files[0], 80, files)), /\[1 alpha\]/);
+(0, node_test_1.default)('view header names only its repository', () => {
+    const header = (0, tui_1.stripAnsi)((0, board_1.headerBar)('/state/repos/alpha-11111111/chatter.db', 80));
+    strict_1.default.match(header, /#alpha/);
+    strict_1.default.doesNotMatch(header, /\[\d+ /);
+});
+(0, node_test_1.default)('plugin views require an explicit focused repository context', () => {
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{}'), null);
+    strict_1.default.equal((0, board_1.pluginContextCwd)('not-json'), null);
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{"focused_pane_cwd":"/repo/one"}'), '/repo/one');
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{"workspace_cwd":"/repo/two","focused_pane_cwd":"/repo/one"}'), '/repo/two');
+    strict_1.default.equal((0, board_1.pluginContextCwd)('{"worktree":{"checkout_path":"/repo/three"},"workspace_cwd":"/repo/two"}'), '/repo/three');
 });
 (0, node_test_1.default)('update helpers preserve the manifest and unsupported-source behavior', () => {
     strict_1.default.match((0, update_1.manifestVersion)(process.cwd()) ?? '', /^\d+\.\d+\.\d+$/);
