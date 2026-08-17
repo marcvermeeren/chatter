@@ -9,6 +9,7 @@ const { whoami } = require('../src/team');
 const c = require('../src/commands');
 const { cmdBoard, cmdChatView } = require('../src/board');
 const s = require('../src/setup');
+const { cmdUpdate } = require('../src/update');
 
 // Message content is sacred: commands whose args are free text never have
 // flags plucked out of them. Everything else accepts --json anywhere.
@@ -43,7 +44,7 @@ const COMMANDS = {
   ask: c.cmdAsk, answer: c.cmdAnswer, questions: c.cmdQuestions,
   task: c.cmdTask, handoff: c.cmdHandoff,
   whoami: c.cmdWhoami, iam: c.cmdIam, log: c.cmdLog, stats: c.cmdStats,
-  setup: s.cmdSetup, brief: c.cmdBrief,
+  setup: s.cmdSetup, brief: c.cmdBrief, update: cmdUpdate,
   data: c.cmdData, purge: c.cmdPurge, spawn: c.cmdSpawn, role: c.cmdRole, forget: c.cmdForget,
 };
 const run = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : null;

@@ -787,6 +787,7 @@ function help() {
   chatter purge <repo>|--orphans|--all|--older-than 30d [--yes]   delete stored data
   chatter whoami
   chatter iam <name>                    set the human's chat name (human only)
+  chatter update [--check]              bring this machine's chatter up to date (human only)
 
 Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
 them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
@@ -937,6 +938,6 @@ module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent, cmdRole, setRole, cmdForget, hookReap,
-  taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos,
+  taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos, humanOnly,
   hookStartup, hookFlush, hookOpenBoard, hookOpenChat, hookOpenChatTab,
 };

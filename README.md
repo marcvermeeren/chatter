@@ -137,6 +137,36 @@ chatter setup --yes [--name marc] [--key "prefix+alt+c"] [--tab-key "prefix+alt+
 a key already used by something else is skipped with a note rather than
 overwritten.
 
+### Staying current
+
+```sh
+chatter update            # bring this machine up to date
+chatter update --check    # just look; changes nothing
+```
+
+One command for both install flavors, because it asks Herdr's registry how
+*this* machine got the plugin. Installed from GitHub? It reinstalls
+(reinstalling **is** upgrading in Herdr's model), keeping any `--ref` pin.
+Running from a linked working tree? It fast-forwards that checkout and
+re-registers the manifest. Either way it prints `v0.17.2 → v0.18.0` (or
+"already up to date"), refreshes the `chatter` symlink, and points you at
+`chatter doctor`.
+
+It stops rather than forces: a checkout with uncommitted changes or one that
+has diverged from its remote is reported, never reset — chatter doesn't
+discard your work.
+
+**Your data always survives an upgrade.** Config, your name and every per-repo
+universe live outside the checkout (state dir + config dir), so upgrading
+never touches them.
+
+Versions aren't git tags, so "is there an update?" is a commit comparison:
+the registry's `resolved_commit` against `git ls-remote` for GitHub installs,
+your `HEAD` against `origin` for a linked checkout (a checkout that's *ahead*
+of its remote counts as current — that's where the work happens). `chatter
+doctor` runs the same probe as one informational line, capped at three
+seconds and silent on failure, so being offline never slows it or fails it.
+
 ### Troubleshooting
 
 ```sh
@@ -144,8 +174,9 @@ chatter doctor
 ```
 
 Read-only checklist: Node ≥ 22.5, Herdr reachable, plugin registered, CLI on
-PATH, state dir writable, name set, toasts and keybinding configured — each
-failure with the exact fix. Exit code 1 when something's wrong.
+PATH, state dir writable, name set, toasts and keybinding configured, plus a
+note on whether an update is available — each failure with the exact fix.
+Exit code 1 when something's wrong.
 
 ---
 
@@ -292,6 +323,7 @@ chatter data                          what chatter stores, per repo
 chatter purge <repo>|--orphans|--all|--older-than 30d [--yes]
 chatter log [--grep PAT] [--task ID] [--limit N] [--all] [--json]
 chatter stats                         team metrics
+chatter update [--check]              update this machine's chatter (human only)
 chatter whoami · chatter iam <name> · chatter help
 ```
 
@@ -415,6 +447,7 @@ bin/chatter      sh wrapper             bin/chatter.js   entry + dispatch
 src/util.js      flags, output, time    src/db.js        per-repo DBs, schema
 src/herdr.js     herdr CLI + roster     src/team.js      identity + delivery
 src/commands.js  commands + hooks       src/board.js     chat + board views
+src/setup.js     install wizard, doctor src/update.js    self-update, both flavors
 src/tui.js       painter, palette, wrap, keys
 ```
 

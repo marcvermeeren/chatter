@@ -18,6 +18,11 @@ case "$1 $2" in
     fi
     printf '{"result":{"agent":{"name":"%s","agent_status":"idle"}}}\n' "$3" ;;
   "pane get")           printf '{"result":{"pane":{"label":null}}}\n' ;;
+  # Plugin registry: $FAKE_PLUGINS holds the canned `plugin list --json` body
+  # (local vs github source variants live in the test, not here).
+  "plugin list")        [ -n "${FAKE_PLUGINS:-}" ] && cat "$FAKE_PLUGINS" || printf '{"result":{"plugins":[]}}\n' ;;
+  "plugin install")     printf '{"result":{"type":"plugin_installed"}}\n' ;;
+  "plugin link")        printf '{"result":{"type":"plugin_linked"}}\n' ;;
   "agent prompt")       printf '{"result":{"type":"agent_prompted"}}\n' ;;
   "agent rename")       printf '{"result":{"type":"agent_renamed"}}\n' ;;
   "notification show")  printf '{"result":{"shown":true,"type":"notification_show"}}\n' ;;

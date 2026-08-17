@@ -253,6 +253,91 @@ node -e "const c=require('$ROOT/src/commands.js'); process.exit(typeof c.hookOpe
 echo "# spawn (failure path — no herdr available here)"
 $CH spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
 
+echo "# update: linked checkout (a throwaway fixture — never this repo)"
+UPD="$TMP/upd"; UPDHOME="$TMP/updhome"; UPDCALLS="$TMP/upd-calls.log"
+mkdir -p "$UPD" "$UPDHOME/.local/bin"; : > "$UPDCALLS"
+git init -q --bare "$UPD/origin.git"
+git init -q "$UPD/seed"
+( cd "$UPD/seed" && git config user.email t@example.com && git config user.name tester \
+  && git checkout -q -b main \
+  && printf 'id = "chatter"\nversion = "0.1.0"\n' > herdr-plugin.toml \
+  && git add -A && git commit -qm v1 \
+  && git remote add origin "$UPD/origin.git" && git push -q origin main ) >/dev/null 2>&1
+git -C "$UPD/origin.git" symbolic-ref HEAD refs/heads/main
+git clone -q "$UPD/origin.git" "$UPD/root" 2>/dev/null
+# origin moves ahead, carrying a version bump
+( cd "$UPD/seed" && printf 'id = "chatter"\nversion = "0.2.0"\n' > herdr-plugin.toml \
+  && git add -A && git commit -qm v2 && git push -q origin main ) >/dev/null 2>&1
+
+cat > "$TMP/upd.js" <<'JS'
+const u = require(process.env.UPD_SRC);
+const r = u.runUpdate(
+  { source: JSON.parse(process.env.UPD_SOURCE), root: process.env.UPD_ROOT },
+  { check: process.env.UPD_CHECK === '1' });
+console.log(`ok=${r.ok} ${r.lines.join(' | ')}`);
+JS
+updrun() { # updrun <sourceJSON> <root> <check 0|1>
+  env HOME="$UPDHOME" HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$UPDCALLS" \
+    UPD_SRC="$ROOT/src/update.js" UPD_SOURCE="$1" UPD_ROOT="$2" UPD_CHECK="$3" \
+    node --no-warnings "$TMP/upd.js" 2>&1
+}
+
+updrun '{"kind":"local"}' "$UPD/root" 1 | grep -q "update available" \
+  && ok "--check sees the new commit on origin" || fail "--check sees the new commit"
+OUT=$(updrun '{"kind":"local"}' "$UPD/root" 0)
+echo "$OUT" | grep -q "v0.1.0 → v0.2.0" && ok "update reports the version bump" || fail "update reports the version bump ($OUT)"
+echo "$OUT" | grep -q "fast-forwarded" && ok "update fast-forwards the checkout" || fail "update fast-forwards"
+grep -q "plugin link $UPD/root" "$UPDCALLS" && ok "update re-registers the manifest" || fail "update re-registers the manifest"
+[ "$(grep -c 'version = "0.2.0"' "$UPD/root/herdr-plugin.toml")" = "1" ] && ok "checkout really advanced" || fail "checkout really advanced"
+updrun '{"kind":"local"}' "$UPD/root" 1 | grep -q "up to date" && ok "--check is quiet once current" || fail "--check quiet once current"
+updrun '{"kind":"local"}' "$UPD/root" 0 | grep -q "already up to date (v0.2.0)" \
+  && ok "a second update is a no-op" || fail "a second update is a no-op"
+
+# A checkout that is AHEAD of its remote (this is where the work happens) is
+# current, not behind.
+( cd "$UPD/root" && git config user.email t@example.com && git config user.name tester \
+  && printf 'id = "chatter"\nversion = "0.3.0"\n' > herdr-plugin.toml && git add -A && git commit -qm ahead ) >/dev/null 2>&1
+updrun '{"kind":"local"}' "$UPD/root" 1 | grep -q "up to date" \
+  && ok "a checkout ahead of origin is not 'behind'" || fail "checkout ahead misreported as behind"
+( cd "$UPD/root" && git reset -q --hard origin/main ) >/dev/null 2>&1
+
+echo "x" >> "$UPD/root/herdr-plugin.toml"
+DIRTY=$(updrun '{"kind":"local"}' "$UPD/root" 0)
+echo "$DIRTY" | grep -q "ok=false" && echo "$DIRTY" | grep -q "uncommitted changes" \
+  && ok "dirty checkout refuses to update" || fail "dirty checkout refused ($DIRTY)"
+( cd "$UPD/root" && git checkout -q -- herdr-plugin.toml ) >/dev/null 2>&1
+
+mkdir -p "$TMP/notgit"
+updrun '{"kind":"local"}' "$TMP/notgit" 0 | grep -q "not a git checkout" \
+  && ok "a non-git plugin root fails clearly" || fail "non-git plugin root message"
+updrun '{}' "$UPD/root" 0 | grep -q "not registered with Herdr" \
+  && ok "an unregistered plugin fails clearly" || fail "unregistered plugin message"
+
+echo "# update: github install reinstalls"
+: > "$UPDCALLS"
+updrun '{"kind":"github","owner":"marcvermeeren","repo":"chatter"}' "$UPD/root" 0 >/dev/null 2>&1
+grep -q "plugin install marcvermeeren/chatter --yes" "$UPDCALLS" \
+  && ok "github source reinstalls through herdr" || fail "github source reinstalls"
+grep -q "worktree create\|git pull" "$UPDCALLS" && fail "github path touched a checkout" || ok "github path pulls nothing"
+: > "$UPDCALLS"
+updrun '{"kind":"github","owner":"o","repo":"r","subdir":"plugins/chatter","requested_ref":"v9"}' "$UPD/root" 0 >/dev/null 2>&1
+grep -q "plugin install o/r/plugins/chatter --yes --ref v9" "$UPDCALLS" \
+  && ok "subdir and pinned ref survive the reinstall" || fail "subdir/ref survive the reinstall"
+
+echo "# update: CLI wrapper reads the registry, humans only"
+cat > "$TMP/plugins-local.json" <<EOF
+{"result":{"plugins":[{"plugin_id":"chatter","version":"0.2.0","plugin_root":"$UPD/root","source":{"kind":"local"}}]}}
+EOF
+UPDCLI="env HOME=$UPDHOME HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$UPDCALLS FAKE_ROSTER=$TMP/roster.json FAKE_PLUGINS=$TMP/plugins-local.json"
+$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" update --check 2>&1 | grep -q "up to date" \
+  && ok "chatter update --check runs off the registry" || fail "chatter update --check off the registry"
+AG_OUT=$(HERDR_PANE_ID=w1:p1 $UPDCLI node --no-warnings "$ROOT/bin/chatter.js" update 2>&1)
+echo "$AG_OUT" | grep -q "human-only" && ok "agents cannot update the plugin" || fail "agent update not blocked: $AG_OUT"
+$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" doctor 2>&1 | grep -q "chatter is up to date" \
+  && ok "doctor reports update state as a note" || fail "doctor reports update state"
+$UPDCLI node --no-warnings "$ROOT/bin/chatter.js" help | grep -q "chatter update" \
+  && ok "help documents update" || fail "help documents update"
+
 echo "# setup --yes + doctor"
 SETHOME="$TMP/sethome"; mkdir -p "$SETHOME/.config/herdr" "$SETHOME/.local/bin"
 cd "$REPO"

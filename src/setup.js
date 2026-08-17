@@ -91,8 +91,20 @@ function doctorChecks() {
   const st = herdr(['status']);
   add(st.ok, 'Herdr server reachable', 'start Herdr, or run inside a Herdr session');
   const pl = herdr(['plugin', 'list', '--json']);
-  const registered = pl.ok && pl.json && (pl.json.result.plugins || []).some((p) => p.plugin_id === PLUGIN_ID);
-  add(!!registered, 'plugin registered with Herdr', `herdr plugin install/link this directory`);
+  const entry = pl.ok && pl.json && pl.json.result
+    ? (pl.json.result.plugins || []).find((p) => p.plugin_id === PLUGIN_ID)
+    : null;
+  add(!!entry, 'plugin registered with Herdr', `herdr plugin install/link this directory`);
+  // Best effort, hard-capped, silent when it fails: being offline must never
+  // slow doctor down or paint it red. Informational only, never a ✗.
+  if (entry) {
+    try {
+      const { updateStatus } = require('./update');
+      const st = updateStatus({ source: entry.source, root: entry.plugin_root }, { timeout: 3000 });
+      if (st.state === 'behind') add(null, 'update available — run: chatter update');
+      else if (st.state === 'current') add(null, `chatter is up to date (v${entry.version || '?'})`);
+    } catch { /* the update probe must never break doctor */ }
+  }
   const link = path.join(os.homedir(), '.local', 'bin', 'chatter');
   let linkOk = false;
   try { linkOk = fs.lstatSync(link).isSymbolicLink() && fs.existsSync(fs.realpathSync(link)); } catch { /* absent */ }
