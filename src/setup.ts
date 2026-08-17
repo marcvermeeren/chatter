@@ -211,7 +211,15 @@ export function cmdSetup(me: Identity, args: readonly string[]): void {
 // ----------------------------------------------------------- wizard (popup)
 
 const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 } as const;
-type SetupStep = typeof STEPS[keyof typeof STEPS];
+export type SetupStep = typeof STEPS[keyof typeof STEPS];
+
+export function nextSetupStep(step: SetupStep): SetupStep {
+  if (step === STEPS.NAME) return STEPS.TOASTS;
+  if (step === STEPS.TOASTS) return STEPS.KEY;
+  if (step === STEPS.KEY) return STEPS.TABKEY;
+  if (step === STEPS.TABKEY) return STEPS.DONE;
+  return STEPS.DONE;
+}
 
 interface SetupState {
   step: SetupStep;
@@ -284,15 +292,15 @@ export function wizard(): void {
         const taken = state.name ? nameTaken(state.name) : 'empty';
         if (!state.name) state.error = 'name required';
         else if (taken) state.error = `"${state.name}" is ${taken} — pick another`;
-        else { state.error = ''; state.step = STEPS.TOASTS; }
+        else { state.error = ''; state.step = nextSetupStep(state.step); }
       }
     } else if (state.step === STEPS.TOASTS) {
       if (key.type === 'text' && (key.text === 'y' || key.text === 'n')) state.toasts = key.text === 'y';
-      else if (key.type === 'enter') state.step = STEPS.KEY;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
     } else if (state.step === STEPS.KEY) {
       if (key.type === 'backspace') state.key = state.key.slice(0, -1);
       else if (key.type === 'text') state.key += key.text;
-      else if (key.type === 'enter') state.step = STEPS.TABKEY;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
     } else if (state.step === STEPS.TABKEY) {
       if (key.type === 'backspace') state.tabKey = state.tabKey.slice(0, -1);
       else if (key.type === 'text') state.tabKey += key.text;
@@ -304,7 +312,7 @@ export function wizard(): void {
           tabKey: state.tabKey.trim() || null,
         });
         state.checks = doctorChecks();
-        state.step = STEPS.DONE;
+        state.step = nextSetupStep(state.step);
       }
     } else if (state.step === STEPS.DONE && key.type === 'enter') {
       // Popups are singletons: exit first, then a detached child opens chat.

@@ -3,23 +3,15 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT INT TERM
+trap 'find "$TMP" -depth -delete' EXIT INT TERM
 
 BASELINE=$(tr -d '[:space:]' < "$ROOT/test/legacy-baseline.txt")
 git -C "$ROOT" cat-file -e "$BASELINE^{commit}"
-mkdir "$TMP/legacy"
+mkdir "$TMP/legacy" "$TMP/repo"
 git -C "$ROOT" archive "$BASELINE" | tar -x -C "$TMP/legacy"
-cp "$ROOT/test/smoke.sh" "$ROOT/test/surface.js" "$TMP/legacy/test/"
+git -C "$TMP/repo" init -q
+git -C "$TMP/repo" -c user.email=test@example.com -c user.name=test commit --allow-empty -q -m init
 
-CHATTER_ENTRY="$TMP/legacy/bin/chatter.js" CHATTER_MODULE_ROOT="$TMP/legacy/src" \
-  CHATTER_SOURCE_ROOT="$TMP/legacy" CHATTER_SOURCE_EXT=js \
-  sh "$TMP/legacy/test/smoke.sh" >"$TMP/legacy.out"
-CHATTER_ENTRY="$ROOT/dist/bin/chatter.js" CHATTER_MODULE_ROOT="$ROOT/dist/src" \
-  sh "$ROOT/test/smoke.sh" >"$TMP/dist.out"
-
-if ! diff -u "$TMP/legacy.out" "$TMP/dist.out"; then
-  echo "legacy and compiled behavior differ" >&2
-  exit 1
-fi
-
-echo "legacy and compiled smoke behavior match"
+DIFF_ROOT="$TMP" DIFF_REPO="$TMP/repo" \
+  LEGACY_ENTRY="$TMP/legacy/bin/chatter.js" CURRENT_ENTRY="$ROOT/dist/bin/chatter.js" \
+  node --no-warnings --experimental-sqlite "$ROOT/test/differential.js"

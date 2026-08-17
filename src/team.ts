@@ -8,7 +8,7 @@ import { herdr, sessionAgents, invalidateSessionAgents, paneLabel } from './herd
 import { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } from './db';
 import { die } from './util';
 import type {
-  ChatterDb, CountRow, Identity, LastReadRow, LiveAgent, MessageRow, NameRow, PaneRow,
+  AgentStatus, ChatterDb, CountRow, Identity, LastReadRow, LiveAgent, MessageRow, NameRow, PaneRow,
 } from './types';
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -156,7 +156,7 @@ export function resolveRecipient(
 // one is showing a dialog that our text would answer.
 const DELIVERABLE = new Set(['idle', 'done', 'working', 'unknown']);
 
-interface DeliveryTarget { paneId: string; status: string | undefined }
+interface DeliveryTarget { paneId: string; status: AgentStatus | undefined }
 function resolveTarget(name: string, live: readonly LiveAgent[], d: ChatterDb = db()): DeliveryTarget | null {
   // Fail closed: injection requires the target's CURRENT repo to verify —
   // historical registration alone is never enough (an agent that moved to

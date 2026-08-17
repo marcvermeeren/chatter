@@ -118,9 +118,23 @@ export function openDbFile(file: string): ChatterDb {
   d.exec(SCHEMA);
   // Migration for pre-v0.16 universes.
   try { d.exec('ALTER TABLE agents ADD COLUMN departed_at TEXT'); } catch { /* exists */ }
-  // All result-shape assertions stay behind this boundary. Callers must supply
-  // an explicit row type whenever they read from a statement.
-  return d as ChatterDb;
+  // Node 22.5's first node:sqlite release returns an object whose every value
+  // is null for a missing `get()` row; newer Node releases return undefined.
+  // Normalize that runtime difference at the typed boundary so application
+  // code has one contract across every supported Node version.
+  return {
+    exec: (sql) => d.exec(sql),
+    prepare: <Row extends object = Record<string, never>>(sql: string) => {
+      const statement = d.prepare(sql);
+      return {
+        all: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params) as Row[],
+        // `all()[0]` avoids Node 22.5's null-filled phantom `get()` row while
+        // preserving legitimate rows (including aggregate rows containing null).
+        get: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params)[0] as Row | undefined,
+        run: (...params: import('node:sqlite').SQLInputValue[]) => statement.run(...params),
+      };
+    },
+  };
 }
 
 export function repoDbFile(repoRoot: string): string {

@@ -38,6 +38,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdChatView = exports.cmdBoard = void 0;
 exports.headerBar = headerBar;
+exports.nextWizardStep = nextWizardStep;
+exports.chatEscapeAction = chatEscapeAction;
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
 const node_fs_1 = __importDefault(require("node:fs"));
@@ -178,6 +180,26 @@ const WZ = {
     HANDLE: 'handle', KIND: 'kind', SETUP: 'setup', BRANCH: 'branch', PURPOSE: 'purpose',
     MORE: 'more', CONFIRM: 'confirm', RUN: 'run', KICKOFF: 'kickoff', DONE: 'done',
 };
+function nextWizardStep(step, { mode = 'spawn', tab = false } = {}) {
+    if (step === WZ.HANDLE)
+        return WZ.KIND;
+    if (step === WZ.KIND)
+        return WZ.SETUP;
+    if (step === WZ.SETUP)
+        return tab ? WZ.PURPOSE : WZ.BRANCH;
+    if (step === WZ.BRANCH)
+        return WZ.PURPOSE;
+    if (step === WZ.PURPOSE)
+        return mode === 'team' ? WZ.MORE : WZ.CONFIRM;
+    return step;
+}
+function chatEscapeAction(persistent, { wizard = false, transient = false } = {}) {
+    if (wizard)
+        return 'cancel-wizard';
+    if (!persistent)
+        return 'close';
+    return transient ? 'clear-transient' : 'persistent-hint';
+}
 const KIND_FALLBACK = ['claude', 'codex', 'pi', 'opencode', 'gemini', 'cursor'];
 // Herdr owns the list of kinds it can start — ask it, and only fall back when
 // the CLI is unreachable or its help format moves.
@@ -407,26 +429,26 @@ function wizardKey(key, d, ui, paint) {
             else if (key.type === 'left')
                 cycle(-1);
             else if (key.type === 'enter')
-                w.step = WZ.SETUP;
+                w.step = nextWizardStep(w.step);
             break;
         case WZ.SETUP:
             if (key.type === 'left' || key.type === 'right' || (key.type === 'text' && key.text === ' '))
                 p.tab = !p.tab;
             else if (key.type === 'enter')
-                w.step = p.tab ? WZ.PURPOSE : WZ.BRANCH;
+                w.step = nextWizardStep(w.step, { tab: p.tab });
             break;
         case WZ.BRANCH:
             p.branch = edit(p.branch, /[^A-Za-z0-9._/-]/g);
             if (key.type === 'enter') {
                 if (!p.branch)
                     p.branch = `agents/${p.handle}`;
-                w.step = WZ.PURPOSE;
+                w.step = nextWizardStep(w.step);
             }
             break;
         case WZ.PURPOSE:
             p.purpose = edit(p.purpose);
             if (key.type === 'enter')
-                w.step = w.mode === 'team' ? WZ.MORE : WZ.CONFIRM;
+                w.step = nextWizardStep(w.step, { mode: w.mode });
             break;
         case WZ.MORE:
             if (key.type === 'text' && (key.text === 'y' || key.text === 'Y')) {
@@ -725,12 +747,16 @@ function runView(render, { input = false } = {}) {
             if (key.type === 'close')
                 process.exit(0); // ctrl+c always closes
             if (key.type === 'esc') {
-                if (ui.wizard && d)
+                const action = chatEscapeAction(persistent, {
+                    wizard: !!ui.wizard && !!d,
+                    transient: !!(ui.pendingSpawn || ui.block || ui.buffer),
+                });
+                if (action === 'cancel-wizard' && ui.wizard && d)
                     return wizardKey(key, d, ui, paint);
-                if (!persistent)
+                if (action === 'close')
                     process.exit(0);
                 // Persistent pane: Esc unwinds state instead of closing the pane.
-                if (ui.pendingSpawn || ui.block || ui.buffer) {
+                if (action === 'clear-transient') {
                     ui.pendingSpawn = null;
                     ui.block = null;
                     ui.buffer = '';

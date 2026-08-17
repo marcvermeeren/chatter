@@ -6,43 +6,43 @@ description = "Group chat for coding agents. After install run: herdr plugin act
 platforms = ["linux", "macos"]
 
 [[startup]]
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_startup"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_startup"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_flush"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_flush"]
 
 [[events]]
 on = "pane.closed"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_reap"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_reap"]
 
 [[events]]
 on = "worktree.removed"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_reap"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_reap"]
 
 [[actions]]
 id = "open-board"
 title = "Open Chatter board"
 contexts = ["global", "workspace", "pane"]
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_open_board"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_open_board"]
 
 [[actions]]
 id = "open-chat"
 title = "Open group chat"
 contexts = ["global", "workspace", "pane"]
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_open_chat"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_open_chat"]
 
 [[actions]]
 id = "open-chat-tab"
 title = "Open group chat in a tab"
 contexts = ["global", "workspace", "pane"]
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_open_chat_tab"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_open_chat_tab"]
 
 [[actions]]
 id = "setup"
 title = "Set up Chatter (wizard)"
 contexts = ["global", "workspace", "pane"]
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_setup_action"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_setup_action"]
 
 [[panes]]
 id = "setup"
@@ -50,7 +50,7 @@ title = "Chatter setup"
 placement = "popup"
 width = "70%"
 height = "70%"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_setup_wizard"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_setup_wizard"]
 
 [[panes]]
 id = "board"
@@ -58,7 +58,7 @@ title = "Chatter board"
 placement = "popup"
 width = "80%"
 height = "80%"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "board"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "board"]
 
 [[panes]]
 id = "chat"
@@ -66,4 +66,4 @@ title = "Chatter group chat"
 placement = "popup"
 width = "70%"
 height = "80%"
-command = ["node", "--no-warnings", "dist/bin/chatter.js", "_chat_view"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_chat_view"]

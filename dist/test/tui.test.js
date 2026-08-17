@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const strict_1 = __importDefault(require("node:assert/strict"));
 const node_test_1 = __importDefault(require("node:test"));
 const board_1 = require("../src/board");
+const setup_1 = require("../src/setup");
 const update_1 = require("../src/update");
 const tui_1 = require("../src/tui");
 (0, node_test_1.default)('terminal sanitization removes controls but preserves newlines', () => {
@@ -20,6 +21,24 @@ const tui_1 = require("../src/tui");
     strict_1.default.deepEqual((0, tui_1.decodeKey)('\x1b[A'), { type: 'up' });
     strict_1.default.deepEqual((0, tui_1.decodeKey)('x'), { type: 'text', text: 'x' });
     strict_1.default.deepEqual((0, tui_1.decodeKey)('\x1b[99~'), { type: 'other' });
+});
+(0, node_test_1.default)('setup and chat wizard state transitions stay explicit', () => {
+    strict_1.default.equal((0, setup_1.nextSetupStep)(0), 1);
+    strict_1.default.equal((0, setup_1.nextSetupStep)(1), 2);
+    strict_1.default.equal((0, setup_1.nextSetupStep)(2), 3);
+    strict_1.default.equal((0, setup_1.nextSetupStep)(3), 4);
+    strict_1.default.equal((0, board_1.nextWizardStep)('handle'), 'kind');
+    strict_1.default.equal((0, board_1.nextWizardStep)('kind'), 'setup');
+    strict_1.default.equal((0, board_1.nextWizardStep)('setup', { tab: false }), 'branch');
+    strict_1.default.equal((0, board_1.nextWizardStep)('setup', { tab: true }), 'purpose');
+    strict_1.default.equal((0, board_1.nextWizardStep)('purpose', { mode: 'spawn' }), 'confirm');
+    strict_1.default.equal((0, board_1.nextWizardStep)('purpose', { mode: 'team' }), 'more');
+});
+(0, node_test_1.default)('Escape closes popups but only unwinds or hints in persistent chat panes', () => {
+    strict_1.default.equal((0, board_1.chatEscapeAction)(false), 'close');
+    strict_1.default.equal((0, board_1.chatEscapeAction)(true, { transient: true }), 'clear-transient');
+    strict_1.default.equal((0, board_1.chatEscapeAction)(true), 'persistent-hint');
+    strict_1.default.equal((0, board_1.chatEscapeAction)(true, { wizard: true }), 'cancel-wizard');
 });
 (0, node_test_1.default)('chat header omits inactive universe tabs', () => {
     const files = ['/state/repos/alpha-11111111/chatter.db', '/state/repos/beta-22222222/chatter.db'];

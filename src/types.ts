@@ -1,22 +1,26 @@
 import type { SQLInputValue, StatementResultingChanges } from 'node:sqlite';
 
+export type AgentStatus = 'idle' | 'done' | 'working' | 'blocked' | 'unknown';
+type NoteStatus = 'active' | 'superseded' | 'resolved';
+type TaskStatus = 'open' | 'in_progress' | 'done';
+type HandoffStatus = 'pending' | 'done';
+
 export interface Identity {
   name: string;
   paneId?: string | null;
   human: boolean;
-  status?: string | null;
+  status?: AgentStatus | null;
 }
 
 export interface LiveAgent {
-  name: string;
+  name?: string | null;
   pane_id: string;
   workspace_id?: string;
   cwd?: string;
   branch?: string | null;
   kind?: string;
   agent?: string;
-  agent_status?: string;
-  status?: string;
+  agent_status?: AgentStatus;
 }
 
 export interface AgentRow {
@@ -52,7 +56,7 @@ export interface NoteRow {
   text: string;
   task_id: string | null;
   commit_sha: string | null;
-  status: string;
+  status: NoteStatus;
   superseded_by: number | null;
   created_at: string;
 }
@@ -60,7 +64,7 @@ export interface NoteRow {
 export interface TaskRow {
   id: string;
   title: string;
-  status: string;
+  status: TaskStatus;
   assignee: string | null;
   created_by: string;
   commit_sha: string | null;
@@ -79,7 +83,7 @@ export interface HandoffRow {
   files_json: string | null;
   tests: string | null;
   next_steps: string | null;
-  status: string;
+  status: HandoffStatus;
   created_at: string;
 }
 

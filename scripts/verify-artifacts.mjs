@@ -39,7 +39,9 @@ if (JSON.stringify(actual) !== JSON.stringify(expected)) {
 const manifest = readFileSync(join(root, 'herdr-plugin.toml'), 'utf8');
 const manifestVersion = manifest.match(/^version = "([^"]+)"$/m)?.[1];
 if (manifestVersion !== pkg.version) fail(`package version ${pkg.version} differs from manifest ${manifestVersion}`);
-for (const match of manifest.matchAll(/^command = \["node", "--no-warnings", "([^"]+)"/gm)) {
+const manifestCommands = [...manifest.matchAll(/^command = \["node", "--no-warnings", "--experimental-sqlite", "([^"]+)"/gm)];
+if (manifestCommands.length !== 11) fail(`expected 11 Node manifest commands with the SQLite compatibility flag, found ${manifestCommands.length}`);
+for (const match of manifestCommands) {
   const target = match[1];
   if (!target || !existsSync(join(root, target))) fail(`manifest target does not exist: ${target}`);
 }

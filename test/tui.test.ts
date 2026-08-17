@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { headerBar } from '../src/board';
+import { chatEscapeAction, headerBar, nextWizardStep } from '../src/board';
+import { nextSetupStep } from '../src/setup';
 import { manifestVersion, runUpdate } from '../src/update';
 import { clean, decodeKey, stripAnsi, visWidth, wrap } from '../src/tui';
 
@@ -18,6 +19,26 @@ test('raw terminal keys decode into an explicit union', () => {
   assert.deepEqual(decodeKey('\x1b[A'), { type: 'up' });
   assert.deepEqual(decodeKey('x'), { type: 'text', text: 'x' });
   assert.deepEqual(decodeKey('\x1b[99~'), { type: 'other' });
+});
+
+test('setup and chat wizard state transitions stay explicit', () => {
+  assert.equal(nextSetupStep(0), 1);
+  assert.equal(nextSetupStep(1), 2);
+  assert.equal(nextSetupStep(2), 3);
+  assert.equal(nextSetupStep(3), 4);
+  assert.equal(nextWizardStep('handle'), 'kind');
+  assert.equal(nextWizardStep('kind'), 'setup');
+  assert.equal(nextWizardStep('setup', { tab: false }), 'branch');
+  assert.equal(nextWizardStep('setup', { tab: true }), 'purpose');
+  assert.equal(nextWizardStep('purpose', { mode: 'spawn' }), 'confirm');
+  assert.equal(nextWizardStep('purpose', { mode: 'team' }), 'more');
+});
+
+test('Escape closes popups but only unwinds or hints in persistent chat panes', () => {
+  assert.equal(chatEscapeAction(false), 'close');
+  assert.equal(chatEscapeAction(true, { transient: true }), 'clear-transient');
+  assert.equal(chatEscapeAction(true), 'persistent-hint');
+  assert.equal(chatEscapeAction(true, { wizard: true }), 'cancel-wizard');
 });
 
 test('chat header omits inactive universe tabs', () => {

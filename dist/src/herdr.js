@@ -25,10 +25,26 @@ let _live = null;
 function isRecord(value) {
     return typeof value === 'object' && value !== null;
 }
+const AGENT_STATUSES = new Set(['idle', 'done', 'working', 'blocked', 'unknown']);
+const agentStatus = (value) => typeof value === 'string' && AGENT_STATUSES.has(value) ? value : undefined;
 function agentList(value) {
     if (!isRecord(value) || !isRecord(value.result) || !Array.isArray(value.result.agents))
         return [];
-    return value.result.agents.filter((agent) => isRecord(agent) && typeof agent.name === 'string' && typeof agent.pane_id === 'string');
+    return value.result.agents.flatMap((agent) => {
+        if (!isRecord(agent) || typeof agent.pane_id !== 'string')
+            return [];
+        const status = agentStatus(agent.agent_status);
+        return [{
+                pane_id: agent.pane_id,
+                ...(typeof agent.name === 'string' || agent.name === null ? { name: agent.name } : {}),
+                ...(typeof agent.workspace_id === 'string' ? { workspace_id: agent.workspace_id } : {}),
+                ...(typeof agent.cwd === 'string' ? { cwd: agent.cwd } : {}),
+                ...(typeof agent.branch === 'string' || agent.branch === null ? { branch: agent.branch } : {}),
+                ...(typeof agent.kind === 'string' ? { kind: agent.kind } : {}),
+                ...(typeof agent.agent === 'string' ? { agent: agent.agent } : {}),
+                ...(status ? { agent_status: status } : {}),
+            }];
+    });
 }
 function sessionAgents({ fresh = false } = {}) {
     if (_live && !fresh)

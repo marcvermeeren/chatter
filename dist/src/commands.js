@@ -968,7 +968,9 @@ function ensurePointerAndSymlink() {
         node_fs_1.default.writeFileSync(node_path_1.default.join(cfgDir, 'state-dir'), stateDir + '\n');
     }
     // Make `chatter` callable from any agent shell.
-    const target = node_path_1.default.join(__dirname, '..', 'bin', 'chatter');
+    // Runtime lives in dist/src; the stable user-facing launcher remains at
+    // the repository root so it survives clean rebuilds of generated output.
+    const target = node_path_1.default.join(__dirname, '..', '..', 'bin', 'chatter');
     const link = node_path_1.default.join(node_os_1.default.homedir(), '.local', 'bin', 'chatter');
     try {
         node_fs_1.default.mkdirSync(node_path_1.default.dirname(link), { recursive: true });

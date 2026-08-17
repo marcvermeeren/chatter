@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.logoLines = void 0;
 exports.cmdDoctor = cmdDoctor;
 exports.cmdSetup = cmdSetup;
+exports.nextSetupStep = nextSetupStep;
 exports.wizard = wizard;
 exports.hookOpenSetup = hookOpenSetup;
 // Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
@@ -257,6 +258,17 @@ function cmdSetup(me, args) {
 }
 // ----------------------------------------------------------- wizard (popup)
 const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 };
+function nextSetupStep(step) {
+    if (step === STEPS.NAME)
+        return STEPS.TOASTS;
+    if (step === STEPS.TOASTS)
+        return STEPS.KEY;
+    if (step === STEPS.KEY)
+        return STEPS.TABKEY;
+    if (step === STEPS.TABKEY)
+        return STEPS.DONE;
+    return STEPS.DONE;
+}
 function wizard() {
     const painter = T.makePainter();
     const width = () => process.stdout.columns || 100;
@@ -333,7 +345,7 @@ function wizard() {
                     state.error = `"${state.name}" is ${taken} — pick another`;
                 else {
                     state.error = '';
-                    state.step = STEPS.TOASTS;
+                    state.step = nextSetupStep(state.step);
                 }
             }
         }
@@ -341,7 +353,7 @@ function wizard() {
             if (key.type === 'text' && (key.text === 'y' || key.text === 'n'))
                 state.toasts = key.text === 'y';
             else if (key.type === 'enter')
-                state.step = STEPS.KEY;
+                state.step = nextSetupStep(state.step);
         }
         else if (state.step === STEPS.KEY) {
             if (key.type === 'backspace')
@@ -349,7 +361,7 @@ function wizard() {
             else if (key.type === 'text')
                 state.key += key.text;
             else if (key.type === 'enter')
-                state.step = STEPS.TABKEY;
+                state.step = nextSetupStep(state.step);
         }
         else if (state.step === STEPS.TABKEY) {
             if (key.type === 'backspace')
@@ -364,7 +376,7 @@ function wizard() {
                     tabKey: state.tabKey.trim() || null,
                 });
                 state.checks = doctorChecks();
-                state.step = STEPS.DONE;
+                state.step = nextSetupStep(state.step);
             }
         }
         else if (state.step === STEPS.DONE && key.type === 'enter') {

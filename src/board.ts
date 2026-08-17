@@ -143,8 +143,30 @@ const WZ = {
   HANDLE: 'handle', KIND: 'kind', SETUP: 'setup', BRANCH: 'branch', PURPOSE: 'purpose',
   MORE: 'more', CONFIRM: 'confirm', RUN: 'run', KICKOFF: 'kickoff', DONE: 'done',
 } as const;
-type WizardStep = typeof WZ[keyof typeof WZ];
+export type WizardStep = typeof WZ[keyof typeof WZ];
 type WizardMode = 'team' | 'spawn';
+
+export function nextWizardStep(
+  step: WizardStep,
+  { mode = 'spawn', tab = false }: { mode?: WizardMode; tab?: boolean } = {},
+): WizardStep {
+  if (step === WZ.HANDLE) return WZ.KIND;
+  if (step === WZ.KIND) return WZ.SETUP;
+  if (step === WZ.SETUP) return tab ? WZ.PURPOSE : WZ.BRANCH;
+  if (step === WZ.BRANCH) return WZ.PURPOSE;
+  if (step === WZ.PURPOSE) return mode === 'team' ? WZ.MORE : WZ.CONFIRM;
+  return step;
+}
+
+export type ChatEscapeAction = 'close' | 'cancel-wizard' | 'clear-transient' | 'persistent-hint';
+export function chatEscapeAction(
+  persistent: boolean,
+  { wizard = false, transient = false }: { wizard?: boolean; transient?: boolean } = {},
+): ChatEscapeAction {
+  if (wizard) return 'cancel-wizard';
+  if (!persistent) return 'close';
+  return transient ? 'clear-transient' : 'persistent-hint';
+}
 
 interface SpawnDraft {
   handle: string;
@@ -389,19 +411,19 @@ function wizardKey(key: TuiKey, d: ChatterDb, ui: UiState, paint: () => void): v
     case WZ.KIND:
       if (key.type === 'right') cycle(1);
       else if (key.type === 'left') cycle(-1);
-      else if (key.type === 'enter') w.step = WZ.SETUP;
+      else if (key.type === 'enter') w.step = nextWizardStep(w.step);
       break;
     case WZ.SETUP:
       if (key.type === 'left' || key.type === 'right' || (key.type === 'text' && key.text === ' ')) p.tab = !p.tab;
-      else if (key.type === 'enter') w.step = p.tab ? WZ.PURPOSE : WZ.BRANCH;
+      else if (key.type === 'enter') w.step = nextWizardStep(w.step, { tab: p.tab });
       break;
     case WZ.BRANCH:
       p.branch = edit(p.branch, /[^A-Za-z0-9._/-]/g);
-      if (key.type === 'enter') { if (!p.branch) p.branch = `agents/${p.handle}`; w.step = WZ.PURPOSE; }
+      if (key.type === 'enter') { if (!p.branch) p.branch = `agents/${p.handle}`; w.step = nextWizardStep(w.step); }
       break;
     case WZ.PURPOSE:
       p.purpose = edit(p.purpose);
-      if (key.type === 'enter') w.step = w.mode === 'team' ? WZ.MORE : WZ.CONFIRM;
+      if (key.type === 'enter') w.step = nextWizardStep(w.step, { mode: w.mode });
       break;
     case WZ.MORE:
       if (key.type === 'text' && (key.text === 'y' || key.text === 'Y')) {
@@ -668,10 +690,14 @@ function runView(render: ViewRenderer, { input = false }: { input?: boolean } = 
       const key = T.decodeKey(b.toString());
       if (key.type === 'close') process.exit(0); // ctrl+c always closes
       if (key.type === 'esc') {
-        if (ui.wizard && d) return wizardKey(key, d, ui, paint);
-        if (!persistent) process.exit(0);
+        const action = chatEscapeAction(persistent, {
+          wizard: !!ui.wizard && !!d,
+          transient: !!(ui.pendingSpawn || ui.block || ui.buffer),
+        });
+        if (action === 'cancel-wizard' && ui.wizard && d) return wizardKey(key, d, ui, paint);
+        if (action === 'close') process.exit(0);
         // Persistent pane: Esc unwinds state instead of closing the pane.
-        if (ui.pendingSpawn || ui.block || ui.buffer) {
+        if (action === 'clear-transient') {
           ui.pendingSpawn = null; ui.block = null; ui.buffer = '';
           ui.status = `${T.FAINT}cancelled${T.RESET}`;
         } else {

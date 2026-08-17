@@ -27,6 +27,9 @@ const expectedManifestEntrypoints = [
   '_startup', '_flush', '_reap', '_reap', '_open_board', '_open_chat',
   '_open_chat_tab', '_setup_action', '_setup_wizard', 'board', '_chat_view',
 ];
+const expectedActions = ['open-board', 'open-chat', 'open-chat-tab', 'setup'];
+const expectedEvents = ['pane.agent_status_changed', 'pane.closed', 'worktree.removed'];
+const expectedPanes = ['setup', 'board', 'chat'];
 
 function registryKeys(source, name) {
   const match = source.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n\\}(?: as const(?: satisfies [^;]+)?)?;`));
@@ -45,11 +48,19 @@ assertSame('COMMANDS', registryKeys(source, 'COMMANDS'), expectedCommands);
 assertSame('HOOKS', registryKeys(source, 'HOOKS'), expectedHooks);
 
 const manifest = fs.readFileSync(path.join(root, 'herdr-plugin.toml'), 'utf8');
-const manifestEntrypoints = [...manifest.matchAll(/^command = \["node", "--no-warnings", "[^"]+", "([^"]+)"\]$/gm)]
+const manifestEntrypoints = [...manifest.matchAll(/^command = \["node", "--no-warnings", "--experimental-sqlite", "[^"]+", "([^"]+)"\]$/gm)]
   .map((m) => m[1]);
 assertSame('manifest entrypoints', manifestEntrypoints, expectedManifestEntrypoints);
+const sectionFields = (section, field) => manifest.split(`[[${section}]]`).slice(1).map((block) => {
+  const ownBlock = block.split(/\n\[\[/, 1)[0];
+  return ownBlock.match(new RegExp(`^${field} = "([^"]+)"$`, 'm'))?.[1];
+}).filter(Boolean);
+assertSame('manifest actions', sectionFields('actions', 'id'), expectedActions);
+assertSame('manifest events', sectionFields('events', 'on'), expectedEvents);
+assertSame('manifest panes', sectionFields('panes', 'id'), expectedPanes);
+assertSame('manifest startup count', manifest.split('[[startup]]').slice(1).map(() => 'startup'), ['startup']);
 
-const help = execFileSync(process.execPath, ['--no-warnings', entry, 'help'], {
+const help = execFileSync(process.execPath, ['--no-warnings', '--experimental-sqlite', entry, 'help'], {
   cwd: root,
   encoding: 'utf8',
   env: {
@@ -63,4 +74,4 @@ for (const command of expectedCommands.filter((name) => name !== 'search')) {
   if (!help.includes(`chatter ${command}`)) throw new Error(`help no longer documents chatter ${command}`);
 }
 
-console.log(`surface intact: ${expectedCommands.length} commands, ${expectedHooks.length} hooks, ${expectedManifestEntrypoints.length} manifest entrypoints`);
+console.log(`surface intact: ${expectedCommands.length} commands, ${expectedHooks.length} hooks, ${expectedActions.length} actions, ${expectedEvents.length} events, ${expectedPanes.length} panes`);

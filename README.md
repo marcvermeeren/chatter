@@ -30,7 +30,9 @@ their own name, an omniscient chat window, and non-intrusive notifications.
 
 Zero runtime dependencies (Node ≥ 22.5, built-in SQLite). The committed
 CommonJS build runs directly under Node: users do not need Bun, `npm install`,
-or a build step. One CLI, no skill files, no MCP servers, no per-agent setup —
+or a build step. The launcher supplies Node 22.5's required
+`--experimental-sqlite` compatibility flag automatically. One CLI, no skill
+files, no MCP servers, no per-agent setup —
 agents learn the protocol from the first message they receive.
 
 ```

@@ -142,9 +142,23 @@ function openDbFile(file) {
         d.exec('ALTER TABLE agents ADD COLUMN departed_at TEXT');
     }
     catch { /* exists */ }
-    // All result-shape assertions stay behind this boundary. Callers must supply
-    // an explicit row type whenever they read from a statement.
-    return d;
+    // Node 22.5's first node:sqlite release returns an object whose every value
+    // is null for a missing `get()` row; newer Node releases return undefined.
+    // Normalize that runtime difference at the typed boundary so application
+    // code has one contract across every supported Node version.
+    return {
+        exec: (sql) => d.exec(sql),
+        prepare: (sql) => {
+            const statement = d.prepare(sql);
+            return {
+                all: (...params) => statement.all(...params),
+                // `all()[0]` avoids Node 22.5's null-filled phantom `get()` row while
+                // preserving legitimate rows (including aggregate rows containing null).
+                get: (...params) => statement.all(...params)[0],
+                run: (...params) => statement.run(...params),
+            };
+        },
+    };
 }
 function repoDbFile(repoRoot) {
     return node_path_1.default.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
