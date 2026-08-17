@@ -208,6 +208,40 @@ grep -q 'teamAgents' "$ROOT/src/commands.js" && grep -q 'teamAgents' "$ROOT/src/
 grep -rn 'liveAgents(' "$ROOT/src" "$ROOT/bin" >/dev/null 2>&1 \
   && fail "old liveAgents() name still referenced" || ok "old liveAgents() name fully retired"
 
+echo "# help logo is TTY-only (agents pipe help constantly)"
+HELP_OUT=$($CH help)   # command substitution => stdout is a pipe, not a TTY
+echo "$HELP_OUT" | grep -q "$(printf '\033')" && fail "piped help emits escape sequences" || ok "piped help is escape-free"
+echo "$HELP_OUT" | grep -q '▄' && fail "piped help includes the block logo" || ok "piped help has no block art"
+echo "$HELP_OUT" | grep -q "chatter agents" && ok "piped help still lists commands" || fail "piped help lists commands"
+
+echo "# CLI spawn streams its stages"
+: > "$TMP/herdr-calls.log"
+SPAWN_OUT=$(env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$TMP/herdr-calls.log" FAKE_ROSTER="$TMP/roster.json" \
+  node --no-warnings "$ROOT/bin/chatter.js" spawn helper6 --kind pi 2>&1)
+S_LINE=$(echo "$SPAWN_OUT" | grep -n "starting" | head -1 | cut -d: -f1)
+U_LINE=$(echo "$SPAWN_OUT" | grep -n "is up" | head -1 | cut -d: -f1)
+[ -n "$S_LINE" ] && [ -n "$U_LINE" ] && [ "$S_LINE" -lt "$U_LINE" ] \
+  && ok "spawn prints a 'starting' stage before 'is up' ($S_LINE < $U_LINE)" \
+  || fail "spawn progress not streamed (starting=$S_LINE up=$U_LINE)"
+
+echo "# header: numbered universe tabs only where number keys work (board)"
+node -e "
+const { headerBar } = require('$ROOT/src/board.js');
+const strip = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+const files = ['/s/repos/alpha-11111111/chatter.db', '/s/repos/beta-22222222/chatter.db'];
+const chat = strip(headerBar(files[0], 80));
+const board = strip(headerBar(files[0], 80, files));
+if (!chat.includes('#alpha') || chat.includes('[1 ')) process.exit(1);   // chat: repo name only
+if (!board.includes('[1 alpha]') || !board.includes('[2 beta]')) process.exit(1);
+" && ok "chat header is repo-only, board keeps its tabs" || fail "chat header is repo-only, board keeps its tabs"
+
+echo "# chat-in-a-tab placement"
+grep -q 'id = "open-chat-tab"' "$ROOT/herdr-plugin.toml" && ok "manifest declares open-chat-tab" || fail "manifest declares open-chat-tab"
+grep -q '_open_chat_tab' "$ROOT/herdr-plugin.toml" && grep -q '_open_chat_tab' "$ROOT/bin/chatter.js" \
+  && ok "_open_chat_tab dispatch is wired" || fail "_open_chat_tab dispatch is wired"
+node -e "const c=require('$ROOT/src/commands.js'); process.exit(typeof c.hookOpenChatTab === 'function' ? 0 : 1)" \
+  && ok "hookOpenChatTab resolves" || fail "hookOpenChatTab resolves"
+
 echo "# spawn (failure path — no herdr available here)"
 $CH spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
 

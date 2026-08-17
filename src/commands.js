@@ -613,7 +613,9 @@ function cmdPurge(me, args) {
 // Thin wrapper over Herdr: new tab in this repo, start the agent, name it,
 // announce in #chat. Spawn only — no lifecycle management here.
 // Never exits the process (also runs inside the chat popup).
-function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = null, base = null }, d = db()) {
+// `onProgress(line)` reports each stage as it happens — spawning takes tens of
+// seconds, and a silent screen for that long reads as a hang.
+function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = null, base = null }, d = db(), onProgress = () => {}) {
   const fail = (msg) => ({ ok: false, lines: [msg] });
   if (!rawName) return fail('usage: spawn <name> [--kind codex|claude|pi|...] [--purpose "why"] [--branch B] [--base REF] [--tab]');
   const name = sanitizeName(rawName);
@@ -645,6 +647,7 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     pane = t.json.result.root_pane.pane_id;
     cleanup = () => herdr(['tab', 'close', t.json.result.tab.tab_id]);
     whereLine = `same checkout, new tab (${pane}) — shared files, coordinate carefully`;
+    onProgress(`tab created in this checkout (${pane})`);
   } else {
     const wtBranch = branch || `agents/${name}`;
     const wtArgs = ['worktree', 'create', '--cwd', repoRoot, '--branch', wtBranch, '--label', name, '--no-focus'];
@@ -658,19 +661,23 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     cleanup = null; // never auto-remove a worktree — that's user data
     whereLine = `new worktree on ${wtBranch}${wtPath ? ` (${wtPath})` : ''} — isolated checkout`;
     lines.push(`cleanup when done: herdr worktree remove --path ${wtPath || '<worktree-path>'}`);
+    onProgress(`worktree created on ${wtBranch}`);
   }
   // A fresh worktree/tab's shell may not be at its prompt yet — Herdr then
   // refuses with agent_pane_busy. Retry briefly instead of giving up.
   let start;
+  onProgress(`starting ${kind}…`);
   for (let attempt = 0; attempt < 15; attempt++) {
     start = herdr(['agent', 'start', name, '--kind', kind, '--pane', pane, '--timeout', '60000']);
     if (start.ok || !(start.raw || '').includes('agent_pane_busy')) break;
+    onProgress(`shell warming up, attempt ${attempt + 2}`);
     require('node:child_process').spawnSync('sleep', ['1']);
   }
   if (!start.ok) {
     if (cleanup) cleanup();
     return fail(`agent start failed: ${start.raw}${cleanup ? '' : ' (worktree left in place)'}`);
   }
+  onProgress(`${kind} agent up`);
   herdr(['pane', 'rename', pane, name]); // pane label = role, feeds the roster
   invalidateSessionAgents(); // roster changed — the cached list predates the spawn
   // Boundary proof: the newcomer must verifiably belong to this universe
@@ -678,11 +685,13 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
   const verified = !!teamAgents(d).find((a) => a.name === name);
   logEvent(me.name, 'agent_spawned', name, { kind, by: me.name, purpose: purpose || null, tab: !!tab }, d);
   postToChat(me, `spawned ${name} (${kind})${purpose ? `: ${purpose}` : ''}`, d, () => null);
+  onProgress('announced in #chat');
   lines.unshift(`@${name} is up (${kind}) — ${whereLine}`);
   lines.push(verified ? 'verified: joined this repo\'s universe' : 'warning: could not verify repo membership yet — its mail queues until it checks in');
   if (purpose) {
     const res = sendMessage(me.name, name, `you are "${name}". your purpose: ${purpose}`, 'system', null, d);
     lines.push(res.delivered ? 'purpose delivered to its session' : `purpose queued (${res.reason})`);
+    onProgress(res.delivered ? 'purpose delivered' : 'purpose queued');
   }
   const status = start.json && start.json.result.agent ? start.json.result.agent.agent_status : 'unknown';
   if (status === 'blocked') lines.push('it is showing a startup dialog (trust/permissions) — click through it once');
@@ -692,10 +701,11 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
 
 function cmdSpawn(me, args) {
   const opts = parseFlags(args, { kind: null, purpose: null, tab: false, branch: null, base: null });
+  // The CLI streams the stages as they happen — a spawn can take a minute.
   const r = spawnAgent(me, {
     name: opts._[0], kind: opts.kind, purpose: opts.purpose,
     tab: opts.tab, branch: opts.branch, base: opts.base,
-  });
+  }, db(), (line) => console.log(`… ${line}`));
   for (const l of r.lines) console.log(l);
   if (!r.ok) process.exit(1);
 }
@@ -899,17 +909,23 @@ function hookFlush() {
   if (n) console.log(`flushed ${n}`);
 }
 
-function openPane(entrypoint) {
-  const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', entrypoint]);
+// Placement decides the pane's lifetime: the manifest default is a popup
+// (session-modal, Esc closes it); tab/split make it a persistent pane the
+// human keeps open beside their work.
+function openPane(entrypoint, placement = null) {
+  const args = ['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', entrypoint];
+  if (placement) args.push('--placement', placement);
+  const r = herdr(args);
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
 const hookOpenBoard = () => openPane('board');
 const hookOpenChat = () => openPane('chat');
+const hookOpenChatTab = () => openPane('chat', 'tab');
 
 module.exports = {
   cmdSend, cmdInbox, cmdLog, cmdAgents, cmdWhoami, cmdIam, cmdPost, cmdChat,
   cmdNote, cmdNotes, cmdResolve, cmdAsk, cmdAnswer, cmdQuestions,
   cmdTask, cmdHandoff, cmdStats, cmdBrief, buildBrief, cmdData, cmdPurge, cmdSpawn, spawnAgent, cmdRole, setRole, cmdForget, hookReap,
   taskLabel, openQuestions, help, identity, ensurePointerAndSymlink, flushAllRepos,
-  hookStartup, hookFlush, hookOpenBoard, hookOpenChat,
+  hookStartup, hookFlush, hookOpenBoard, hookOpenChat, hookOpenChatTab,
 };

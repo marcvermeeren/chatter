@@ -10,25 +10,9 @@ const { configRoot, humanName, stateRoot, listRepoDbFiles, openDbFile, gitInfo }
 const { die, parseFlags } = require('./util');
 const T = require('./tui');
 
-// "Delta Corps Priest 1" (figlet), rendered once and baked in. 88 cols.
-const LOGO = [
-  ' ▄████████    ▄█    █▄       ▄████████     ███         ███        ▄████████    ▄████████',
-  '███    ███   ███    ███     ███    ███ ▀█████████▄ ▀█████████▄   ███    ███   ███    ███',
-  '███    █▀    ███    ███     ███    ███    ▀███▀▀██    ▀███▀▀██   ███    █▀    ███    ███',
-  '███         ▄███▄▄▄▄███▄▄   ███    ███     ███   ▀     ███   ▀  ▄███▄▄▄      ▄███▄▄▄▄██▀',
-  '███        ▀▀███▀▀▀▀███▀  ▀███████████     ███         ███     ▀▀███▀▀▀     ▀▀███▀▀▀▀▀',
-  '███    █▄    ███    ███     ███    ███     ███         ███       ███    █▄  ▀███████████',
-  '███    ███   ███    ███     ███    ███     ███         ███       ███    ███   ███    ███',
-  '████████▀    ███    █▀      ███    █▀     ▄████▀      ▄████▀     ██████████   ███    ███',
-  '                                                                              ███    ███',
-];
-const LOGO_SHADES = [240, 242, 244, 246, 248, 250, 252, 254, 231];
-
-function logoLines(width) {
-  if (width < 90) return [` ${T.BOLD}CHATTER${T.RESET}`, ''];
-  return [...LOGO.map((l, i) => ` ${T.fg(LOGO_SHADES[i])}${l}${T.RESET}`),
-    ` ${T.FAINT}group chat for coding agents in Herdr worktrees${T.RESET}`, ''];
-}
+// The wordmark lives with the other painting primitives; re-exported here
+// because setup is where it was born and callers still ask for it.
+const { logoLines } = T;
 
 // -------------------------------------------------------------- config edits
 
@@ -200,7 +184,7 @@ function wizard() {
     checks: null,
     toastsExisting: /\[ui\.toast\]/.test((() => { try { return fs.readFileSync(configToml(), 'utf8'); } catch { return ''; } })()),
   };
-  const field = (v) => `${T.BOLD} › ${T.RESET}${v}${T.INV} ${T.RESET}`;
+  const field = T.field;
   const render = () => {
     const out = [...logoLines(width())];
     out.push(` ${T.BOLD}setup${T.RESET}`);
@@ -209,22 +193,22 @@ function wizard() {
       out.push(`   your chat name ${T.FAINT}(agents will reach you as @${state.name || '…'})${T.RESET}`);
       out.push('   ' + field(state.name));
       if (state.error) out.push(`   ${T.YELLOW}⚠ ${state.error}${T.RESET}`);
-      out.push('', `   ${T.FAINT}Enter continues · Esc aborts${T.RESET}`);
+      out.push('', T.hint('Enter continues', 'Esc aborts'));
     } else if (state.step === STEPS.TOASTS) {
       out.push(`   notifications ${T.FAINT}(DMs and @${state.name} mentions arrive as a toast)${T.RESET}`);
       out.push(state.toastsExisting
         ? `   ${T.FAINT}existing [ui.toast] setting found — will be respected${T.RESET}`
         : `   ${state.toasts ? `${T.GREEN}● enabled${T.RESET}` : `${T.FAINT}○ disabled${T.RESET}`}  ${T.FAINT}(y/n toggles)${T.RESET}`);
-      out.push('', `   ${T.FAINT}Enter continues · Esc aborts${T.RESET}`);
+      out.push('', T.hint('Enter continues', 'Esc aborts'));
     } else if (state.step === STEPS.KEY) {
       out.push(`   keybinding to open the chat window ${T.FAINT}(clear the field to skip)${T.RESET}`);
       out.push('   ' + field(state.key));
-      out.push('', `   ${T.FAINT}Enter applies everything · Esc aborts${T.RESET}`);
+      out.push('', T.hint('Enter applies everything', 'Esc aborts'));
     } else {
       out.push(...(state.report || []).map((l) => `   ${T.GREEN}✓${T.RESET}  ${l}`));
       out.push('');
       out.push(...renderChecks(state.checks || []));
-      out.push('', `   ${T.BOLD}Enter opens the chat window · Esc closes${T.RESET}`);
+      out.push('', T.hint('Enter opens the chat window', 'Esc closes'));
     }
     painter(out);
   };

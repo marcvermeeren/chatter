@@ -4,9 +4,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { matchLive } = require('./herdr');
+const { matchLive, herdr } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
-const { postToChat, teamAgents } = require('./team');
+const { postToChat, teamAgents, sendMessage, nameTaken } = require('./team');
 const { taskLabel, buildBrief, spawnAgent, setRole, identity } = require('./commands');
 const { sanitizeName } = require('./team');
 
@@ -61,9 +61,12 @@ function highlightMentions(line, human) {
       : `${T.fg(T.authorHue(n))}${T.BOLD}@${n}${T.RESET}`);
 }
 
-function headerBar(file, files, width) {
+// The numbered universe tabs are only drawn where the number keys actually
+// switch repos — the board. In the chat view digits are typing, so tabs there
+// would look addressable without being addressable.
+function headerBar(file, width, files = null) {
   const active = (f) => f === file;
-  const tabs = files.length > 1
+  const tabs = files && files.length > 1
     ? files.map((f, i) => active(f) ? `${T.BOLD}[${i + 1} ${repoLabel(f)}]${T.RESET}${T.bg(236)}` : `[${i + 1} ${repoLabel(f)}]`).join(' ')
     : '';
   const left = ` ${T.BOLD}#${repoLabel(file)}${T.RESET}${T.bg(236)}`;
@@ -123,7 +126,270 @@ function buildFeedLines(rows, width, human, openPointer) {
   return lines;
 }
 
+// ------------------------------------------------------------ team wizards
+
+// Popups are singletons, so the wizard cannot be another pane: it is a
+// full-screen takeover of the chat view, in setup.js's visual language.
+const WZ = {
+  HANDLE: 'handle', KIND: 'kind', SETUP: 'setup', BRANCH: 'branch', PURPOSE: 'purpose',
+  MORE: 'more', CONFIRM: 'confirm', RUN: 'run', KICKOFF: 'kickoff', DONE: 'done',
+};
+const KIND_FALLBACK = ['claude', 'codex', 'pi', 'opencode', 'gemini', 'cursor'];
+
+// Herdr owns the list of kinds it can start — ask it, and only fall back when
+// the CLI is unreachable or its help format moves.
+function supportedKinds() {
+  const m = (herdr(['agent', 'start', '--help']).raw || '').match(/possible values:\s*([^\]]+)\]/);
+  const kinds = m ? m[1].split(',').map((s) => s.trim()).filter((s) => /^[a-z][a-z0-9-]*$/.test(s)) : [];
+  return kinds.length ? kinds : KIND_FALLBACK;
+}
+
+// Preselect what this repo already runs — a team tends to be one kind.
+function majorityKind(d, kinds) {
+  const seen = teamAgents(d).map((a) => a.agent).filter((k) => kinds.includes(k));
+  const best = seen.sort((a, b) => seen.filter((k) => k === b).length - seen.filter((k) => k === a).length)[0];
+  return best || (kinds.includes('claude') ? 'claude' : kinds[0]);
+}
+
+const newDraft = (kind) => ({ handle: '', kind, tab: false, branch: '', purpose: '' });
+
+function startWizard(d, ui, mode) {
+  const kinds = supportedKinds();
+  ui.block = null; ui.buffer = ''; ui.status = '';
+  ui.wizard = {
+    mode, kinds, step: WZ.HANDLE, roster: [], progress: [], report: [],
+    draft: newDraft(majorityKind(d, kinds)), typed: '',
+  };
+}
+
+// The same four facts the /spawn-with-args plan card shows.
+function planLines(p) {
+  return [
+    `handle:      @${p.handle}`,
+    `kind:        ${p.kind}`,
+    `code setup:  ${p.tab ? 'THIS checkout, new tab (shared files!)' : `new worktree · branch ${p.branch || `agents/${p.handle}`}`}`,
+    `purpose:     ${p.purpose || '(none — DM it later)'}`,
+  ];
+}
+
+// Live collision check: the same answer `chatter spawn` would give, plus the
+// names this plan is about to claim.
+function handleError(w) {
+  const p = w.draft;
+  if (!p.handle) return 'handle required';
+  if (w.roster.some((r) => r.handle === p.handle)) return `"${p.handle}" is already in this plan`;
+  const taken = nameTaken(p.handle);
+  return taken ? `"${p.handle}" is ${taken} — pick another` : '';
+}
+
+function renderWizard(d, file, files, ui) {
+  const width = process.stdout.columns || 100;
+  const height = process.stdout.rows || 30;
+  const w = ui.wizard;
+  const p = w.draft;
+  const out = [headerBar(file, width), ''];
+  const planned = w.mode === 'team' && w.roster.length ? `  ${T.FAINT}${w.roster.length} planned${T.RESET}` : '';
+  out.push(` ${T.BOLD}${w.mode === 'team' ? 'build the team' : 'add a teammate'}${T.RESET}${planned}`, '');
+  const cancels = w.mode === 'team' ? 'Esc cancels the roster' : 'Esc cancels';
+  if (w.step === WZ.HANDLE) {
+    const err = handleError(w);
+    out.push(`   handle ${T.FAINT}(teammates and you reach it as @${p.handle || '…'})${T.RESET}`);
+    out.push('   ' + T.field(p.handle));
+    if (p.handle && err) out.push(`   ${T.YELLOW}⚠ ${err}${T.RESET}`);
+    out.push('', T.hint('Enter continues', cancels));
+  } else if (w.step === WZ.KIND) {
+    // Herdr knows ~20 kinds; show a window around the selection rather than
+    // wrapping the whole list across three lines.
+    const i = Math.max(0, w.kinds.indexOf(p.kind));
+    const span = Math.min(7, w.kinds.length);
+    const from = Math.max(0, Math.min(i - Math.floor(span / 2), w.kinds.length - span));
+    const strip = w.kinds.slice(from, from + span)
+      .map((k) => (k === p.kind ? `${T.RESET}${T.BOLD}${k}${T.RESET}${T.FAINT}` : k)).join(' · ');
+    out.push(`   agent kind ${T.FAINT}(${i + 1} of ${w.kinds.length})${T.RESET}`);
+    out.push(`   ${T.FAINT}‹${T.RESET} ${T.BOLD}${p.kind}${T.RESET} ${T.FAINT}›${T.RESET}`);
+    out.push(`   ${T.FAINT}${from > 0 ? '… ' : ''}${strip}${from + span < w.kinds.length ? ' …' : ''}${T.RESET}`);
+    out.push('', T.hint('← → picks a kind', 'Enter continues', cancels));
+  } else if (w.step === WZ.SETUP) {
+    out.push('   code setup');
+    const mark = (on, label) => (on ? `${T.GREEN}●${T.RESET} ${label}` : `${T.FAINT}○ ${label}${T.RESET}`);
+    out.push(`   ${mark(!p.tab, 'new worktree')}    ${mark(p.tab, 'same checkout, new tab')}`);
+    out.push(`   ${T.FAINT}worktree = isolated checkout · tab = shared files, coordinate carefully${T.RESET}`);
+    out.push('', T.hint('← → toggles', 'Enter continues', cancels));
+  } else if (w.step === WZ.BRANCH) {
+    out.push(`   branch for @${p.handle}'s worktree`);
+    out.push('   ' + T.field(p.branch));
+    out.push('', T.hint('Enter continues', cancels));
+  } else if (w.step === WZ.PURPOSE) {
+    out.push(`   what is @${p.handle} for? ${T.FAINT}(sent as its first message — may be empty)${T.RESET}`);
+    out.push('   ' + T.field(p.purpose));
+    out.push('', T.hint('Enter continues', cancels));
+  } else if (w.step === WZ.MORE) {
+    out.push(`   ${T.GREEN}✓${T.RESET}  @${p.handle} planned ${T.FAINT}(${p.kind} · ${p.tab ? 'tab' : 'worktree'})${T.RESET}`);
+    out.push('', '   add another teammate? (y/N)');
+    out.push('', T.hint('y adds another', 'Enter reviews the roster', cancels));
+  } else if (w.step === WZ.CONFIRM) {
+    if (w.mode === 'team') {
+      out.push(`   ${T.BOLD}the plan${T.RESET} ${T.FAINT}(${w.roster.length} teammate${w.roster.length > 1 ? 's' : ''}, created in order)${T.RESET}`, '');
+      for (const r of w.roster) {
+        out.push(`   ${T.fg(T.authorHue(r.handle))}@${r.handle}${T.RESET}  ${T.FAINT}${r.kind} · ${r.tab ? 'same checkout, new tab' : `worktree ${r.branch || `agents/${r.handle}`}`}${T.RESET}`);
+        out.push(`     ${T.FAINT}${r.purpose || '(no purpose — DM it later)'}${T.RESET}`);
+      }
+    } else {
+      out.push(...planLines(p).map((l) => `   ${l}`));
+    }
+    if (w.typed) out.push('', `   ${T.YELLOW}⚠ "${T.clean(w.typed)}" — Enter now aborts${T.RESET}`);
+    out.push('', T.hint(`empty Enter creates${w.mode === 'team' ? ' all' : ''}`, 'typing anything cancels'));
+  } else if (w.step === WZ.RUN) {
+    out.push(...w.progress);
+    out.push('', T.hint('working — this can take a minute per teammate'));
+  } else if (w.step === WZ.KICKOFF) {
+    out.push(...w.report.map(reportLine), '');
+    out.push('   kick off now? (Y/n)');
+    out.push(`   ${T.FAINT}sends each teammate its purpose and posts the roster to #chat${T.RESET}`);
+    out.push('', T.hint('Enter kicks off', 'n skips'));
+  } else {
+    out.push(...w.report.map(reportLine));
+    out.push('', T.hint('Enter returns to the chat'));
+  }
+  while (out.length < height) out.push('');
+  return out.slice(0, height);
+}
+
+const reportLine = (r) => (r.ok
+  ? `   ${T.GREEN}✓${T.RESET}  ${T.clean(r.text)}`
+  : `   ${T.NEWMARK}✗${T.RESET}  ${T.clean(r.text)}`);
+
+// Create every planned teammate serially, narrating each stage into the
+// progress list. Blocking by design — the screen keeps up because each
+// stage repaints before the next subprocess call.
+function runWizardSpawns(d, ui, paint) {
+  const w = ui.wizard;
+  const me = { name: humanName(), human: true };
+  const plans = w.mode === 'team' ? w.roster : [w.draft];
+  w.step = WZ.RUN; w.progress = []; w.report = [];
+  paint();
+  for (const p of plans) {
+    if (w.progress.length) w.progress.push('');
+    w.progress.push(`   ${T.BOLD}@${p.handle}${T.RESET} ${T.FAINT}(${p.kind})${T.RESET}`);
+    paint();
+    const r = spawnAgent(me, {
+      name: p.handle,
+      kind: p.kind,
+      // Team planning delivers purposes at kickoff, not at spawn time.
+      purpose: w.mode === 'team' ? null : (p.purpose || null),
+      tab: p.tab,
+      branch: p.tab ? null : (p.branch || null),
+    }, d, (line) => { w.progress.push(`     ${T.FAINT}${line}${T.RESET}`); paint(); });
+    p.created = r.ok;
+    // A spawn can succeed and still carry a caveat — don't tick a warning.
+    for (const l of r.lines) w.report.push({ ok: r.ok && !/^warning:/.test(l), text: l });
+  }
+  w.step = w.mode === 'team' ? WZ.KICKOFF : WZ.DONE;
+  paint();
+}
+
+// Deliver the purposes the planning step deliberately withheld, then one
+// roster brief so the whole team sees who is on it.
+function kickoff(d, ui) {
+  const w = ui.wizard;
+  const me = { name: humanName(), human: true };
+  const made = w.roster.filter((p) => p.created);
+  if (!made.length) { w.report.push({ ok: false, text: 'nothing was created — nothing to kick off' }); return; }
+  for (const p of made) {
+    if (!p.purpose) continue;
+    const res = sendMessage(me.name, p.handle, `you are "${p.handle}". your purpose: ${p.purpose}`, 'system', null, d);
+    w.report.push({ ok: true, text: res.delivered ? `@${p.handle} briefed` : `@${p.handle} brief queued (${res.reason})` });
+  }
+  // Display label if a plan ever carries one; today the wizard collects only
+  // handles, so this reads as the roster of @handles.
+  const brief = ['the team:', ...made.map((p) => `${p.display || `@${p.handle}`} — ${p.purpose || p.kind}`)].join('\n');
+  postToChat(me, brief, d, viewMentionResolver(d));
+  w.report.push({ ok: true, text: 'roster posted to #chat' });
+}
+
+// One raw key, routed by step. Text fields edit their value directly; the
+// confirm card keeps the "empty Enter = yes, typing = no" contract.
+function wizardKey(key, d, ui, paint) {
+  const w = ui.wizard;
+  const p = w.draft;
+  const done = () => { ui.wizard = null; ui.buffer = ''; };
+  if (key.type === 'esc') {
+    done();
+    ui.status = `${T.FAINT}${w.mode === 'team' ? 'team' : 'spawn'} wizard cancelled${T.RESET}`;
+    return paint();
+  }
+  const edit = (val, filter) => key.type === 'backspace' ? val.slice(0, -1)
+    : key.type === 'text' ? val + (filter ? key.text.replace(filter, '') : key.text) : val;
+  const cycle = (delta) => { w.kinds.length && (p.kind = w.kinds[(w.kinds.indexOf(p.kind) + delta + w.kinds.length) % w.kinds.length]); };
+  switch (w.step) {
+    case WZ.HANDLE:
+      p.handle = edit(p.handle, /[^a-z0-9_-]/g);
+      if (key.type === 'text') p.handle = p.handle.toLowerCase();
+      if (key.type === 'enter' && !handleError(w)) { p.branch = `agents/${p.handle}`; w.step = WZ.KIND; }
+      break;
+    case WZ.KIND:
+      if (key.type === 'right') cycle(1);
+      else if (key.type === 'left') cycle(-1);
+      else if (key.type === 'enter') w.step = WZ.SETUP;
+      break;
+    case WZ.SETUP:
+      if (key.type === 'left' || key.type === 'right' || (key.type === 'text' && key.text === ' ')) p.tab = !p.tab;
+      else if (key.type === 'enter') w.step = p.tab ? WZ.PURPOSE : WZ.BRANCH;
+      break;
+    case WZ.BRANCH:
+      p.branch = edit(p.branch, /[^A-Za-z0-9._/-]/g);
+      if (key.type === 'enter') { if (!p.branch) p.branch = `agents/${p.handle}`; w.step = WZ.PURPOSE; }
+      break;
+    case WZ.PURPOSE:
+      p.purpose = edit(p.purpose);
+      if (key.type === 'enter') w.step = w.mode === 'team' ? WZ.MORE : WZ.CONFIRM;
+      break;
+    case WZ.MORE:
+      if (key.type === 'text' && (key.text === 'y' || key.text === 'Y')) {
+        w.roster.push(p); w.draft = newDraft(p.kind); w.step = WZ.HANDLE;
+      } else if (key.type === 'enter' || (key.type === 'text' && (key.text === 'n' || key.text === 'N'))) {
+        w.roster.push(p); w.step = WZ.CONFIRM;
+      }
+      break;
+    case WZ.CONFIRM:
+      w.typed = edit(w.typed);
+      if (key.type === 'enter') {
+        if (w.typed.trim()) { done(); ui.status = `${T.FAINT}cancelled — nothing was created${T.RESET}`; break; }
+        return runWizardSpawns(d, ui, paint);
+      }
+      break;
+    case WZ.RUN:
+      break; // a spawn in flight is never interruptible
+    case WZ.KICKOFF:
+      if (key.type === 'enter' || (key.type === 'text' && (key.text === 'y' || key.text === 'Y'))) {
+        kickoff(d, ui); w.step = WZ.DONE;
+      } else if (key.type === 'text' && (key.text === 'n' || key.text === 'N')) {
+        w.report.push({ ok: false, text: 'not briefed — send purposes later: chatter send <name> "your purpose: …"' });
+        w.step = WZ.DONE;
+      }
+      break;
+    default:
+      if (key.type === 'enter') done();
+  }
+  return paint();
+}
+
 function renderChat(d, file, files, ui) {
+  if (ui.wizard) return renderWizard(d, file, files, ui);
+  return renderFeed(d, file, files, ui);
+}
+
+// Nothing said yet: the wordmark plus the three things worth knowing.
+function welcomeLines(width, feedH) {
+  const logo = feedH >= T.logoLines(width).length + 3 ? T.logoLines(width) : [];
+  const parts = ["this repo's team is empty", '/spawn adds a teammate', '@name pushes', '/help lists commands'];
+  const one = T.hint(...parts);
+  // Two rows rather than one wrapped mid-word in a narrow pane.
+  const rows = T.visWidth(one) <= width ? [one] : [T.hint(...parts.slice(0, 2)), T.hint(...parts.slice(2))];
+  return ['', ...logo, ...rows];
+}
+
+function renderFeed(d, file, files, ui) {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const human = humanName();
@@ -148,7 +414,7 @@ function renderChat(d, file, files, ui) {
        ...ui.block.lines.map((l) => `  ${T.FAINT}│${T.RESET} ${l}`)]
     : [];
   const feedH = Math.max(3, height - 4 - block.length);
-  const all = buildFeedLines(rows, width, human, ui.openPointer);
+  const all = rows.length ? buildFeedLines(rows, width, human, ui.openPointer) : welcomeLines(width, feedH);
   ui.maxOffset = Math.max(0, all.length - feedH);
   ui.offset = Math.min(ui.offset, ui.maxOffset);
   const end = all.length - ui.offset;
@@ -181,9 +447,11 @@ function renderChat(d, file, files, ui) {
     }).join('   ')}  ${T.FAINT}Tab completes${T.RESET}`
     : ui.status
       ? `   ${ui.status}`
-      : `   ${T.FAINT}Enter posts as ${human} · Tab completes @ · ↑↓ scroll · Esc closes${T.RESET}`;
+      // A tab/split pane outlives Esc; only the popup closes on it.
+      : T.hint(`Enter posts as ${human}`, 'Tab completes @', '↑↓ scroll',
+        process.env.HERDR_PANE_ID ? 'ctrl+c closes' : 'Esc closes');
 
-  return [headerBar(file, files, width), ...visible, ...block, sep, inputRow, bottom];
+  return [headerBar(file, width), ...visible, ...block, sep, inputRow, bottom];
 }
 
 // Slash commands typed in the chat input. Results are private (ui.block).
@@ -191,12 +459,14 @@ function renderChat(d, file, files, ui) {
 function runSlash(body, d, ui, paint) {
   const [cmd, ...rest] = body.slice(1).split(/\s+/);
   if (cmd === 'clear') { ui.block = null; return; }
+  if (cmd === 'team') { startWizard(d, ui, 'team'); return; }
   if (cmd === 'spawn') {
     // /spawn <name> [kind] [purpose...] [--tab] — plan first, Enter confirms.
+    // Bare /spawn asks the questions instead of printing a usage line.
     const words = rest.filter((w) => w !== '--tab');
     const tab = rest.includes('--tab');
     const [name, kind, ...purpose] = words;
-    if (!name) { ui.block = { title: 'spawn', lines: ['usage: /spawn <name> [kind] [purpose...] [--tab]'] }; return; }
+    if (!name) { startWizard(d, ui, 'spawn'); return; }
     ui.pendingSpawn = { name, kind: kind || null, purpose: purpose.join(' ') || null, tab };
     ui.block = {
       title: 'add teammate — Enter creates, anything else cancels',
@@ -232,7 +502,13 @@ function runSlash(body, d, ui, paint) {
     } catch (e) { ui.block = { title: 'brief', lines: [String(e.message)] }; }
     return;
   }
-  ui.block = { title: 'commands', lines: ['/brief [today|2h|30m]', '/brief share', '/spawn <name> [kind] [purpose...] [--tab]', '/role @agent <display role...>', '/clear'] };
+  ui.block = { title: 'commands', lines: [
+    '/brief [today|2h|30m]', '/brief share',
+    '/spawn                              add a teammate, step by step',
+    '/spawn <name> [kind] [purpose...] [--tab]',
+    '/team                               plan a whole roster, then create it',
+    '/role @agent <display role...>', '/clear',
+  ] };
 }
 
 // -------------------------------------------------------------------- board
@@ -248,7 +524,7 @@ function renderBoard(d, file, files) {
   const taskBy = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress').map((t) => [t.assignee, t]));
   const openQ = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get().n;
   const dot = { idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK, unknown: T.FAINT, offline: T.FAINT };
-  const out = [headerBar(file, files, width)];
+  const out = [headerBar(file, width, files)];
   if (openQ) out.push(` ${T.YELLOW}${openQ} open question${openQ > 1 ? 's' : ''}${T.RESET}`);
   out.push('', ` ${T.BOLD}Agents${T.RESET}`);
   if (!agents.length) out.push(`   ${T.FAINT}(none registered yet)${T.RESET}`);
@@ -267,7 +543,7 @@ function renderBoard(d, file, files) {
   out.push('', ` ${T.BOLD}Shared memory${T.RESET}`);
   if (!notes.length) out.push(`   ${T.FAINT}(empty)${T.RESET}`);
   for (const n of notes) out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${T.clean(n.text)}`.slice(0, width + 60));
-  out.push('', ` ${T.FAINT}q closes · 1-9 switch repo${T.RESET}`);
+  out.push('', T.hint('1-9 switch repo', 'q closes'));
   return out.slice(0, height);
 }
 
@@ -292,7 +568,10 @@ function runView(render, { input = false } = {}) {
   let files = listRepoDbFiles();
   let file = initialDbFile();
   let d = file ? openDbFile(file) : null;
-  const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0 };
+  const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0, wizard: null };
+  // Pane entrypoints in tab/split mode get HERDR_PANE_ID; the popup does not.
+  // A pane the human placed on purpose must not vanish on a stray Esc.
+  const persistent = input && !!process.env.HERDR_PANE_ID;
   const pickerScreen = () => [
     ` ${T.BOLD}chatter${T.RESET}`,
     '',
@@ -301,7 +580,7 @@ function runView(render, { input = false } = {}) {
     '',
     ...files.map((f, i) => `   ${T.BOLD}${i + 1}${T.RESET}  #${repoLabel(f)}`),
     '',
-    ` ${T.FAINT}1-9 opens · Esc closes${T.RESET}`,
+    T.hint('1-9 opens', 'Esc closes'),
   ];
   const paint = () => {
     files = listRepoDbFiles();
@@ -326,7 +605,19 @@ function runView(render, { input = false } = {}) {
     process.stdin.resume();
     process.stdin.on('data', (b) => {
       const key = T.decodeKey(b.toString());
-      if (key.type === 'esc' || key.type === 'close') process.exit(0);
+      if (key.type === 'close') process.exit(0); // ctrl+c always closes
+      if (key.type === 'esc') {
+        if (ui.wizard && d) return wizardKey(key, d, ui, paint);
+        if (!persistent) process.exit(0);
+        // Persistent pane: Esc unwinds state instead of closing the pane.
+        if (ui.pendingSpawn || ui.block || ui.buffer) {
+          ui.pendingSpawn = null; ui.block = null; ui.buffer = '';
+          ui.status = `${T.FAINT}cancelled${T.RESET}`;
+        } else {
+          ui.status = `${T.FAINT}persistent pane — ctrl+c closes${T.RESET}`;
+        }
+        return paint();
+      }
       // No repo selected yet: picker mode for every view (explicit choice only).
       if (!d) {
         if (key.type === 'text') {
@@ -338,6 +629,8 @@ function runView(render, { input = false } = {}) {
         }
         return;
       }
+      // The wizard owns the whole view (and the keyboard) while it is up.
+      if (ui.wizard) return wizardKey(key, d, ui, paint);
       const page = Math.max(3, (process.stdout.rows || 30) - 6);
       if (!input) {
         if (key.type === 'text') {
@@ -362,9 +655,12 @@ function runView(render, { input = false } = {}) {
             const plan = ui.pendingSpawn;
             ui.pendingSpawn = null;
             if (!body) { // empty Enter = confirm; anything typed = cancel
-              ui.block = { title: 'spawn', lines: [`creating @${plan.name}… (can take up to a minute)`] };
+              ui.block = { title: `creating @${plan.name}`, lines: [] };
               paint();
-              const r = spawnAgent({ name: humanName(), human: true }, plan, d);
+              const r = spawnAgent({ name: humanName(), human: true }, plan, d, (line) => {
+                ui.block.lines.push(`${T.FAINT}${line}${T.RESET}`);
+                paint();
+              });
               ui.block = { title: r.ok ? 'teammate added' : 'spawn failed', lines: r.lines };
               return paint();
             }
@@ -403,4 +699,4 @@ function runView(render, { input = false } = {}) {
 const cmdBoard = () => runView(renderBoard);
 const cmdChatView = () => runView(renderChat, { input: true });
 
-module.exports = { cmdBoard, cmdChatView };
+module.exports = { cmdBoard, cmdChatView, headerBar };  // headerBar: exported for tests

@@ -17,6 +17,34 @@ const YELLOW = fg(179);
 const CYAN = fg(81);
 const NEWMARK = fg(203);
 
+// "Delta Corps Priest 1" (figlet), rendered once and baked in. 88 cols.
+const LOGO = [
+  ' ▄████████    ▄█    █▄       ▄████████     ███         ███        ▄████████    ▄████████',
+  '███    ███   ███    ███     ███    ███ ▀█████████▄ ▀█████████▄   ███    ███   ███    ███',
+  '███    █▀    ███    ███     ███    ███    ▀███▀▀██    ▀███▀▀██   ███    █▀    ███    ███',
+  '███         ▄███▄▄▄▄███▄▄   ███    ███     ███   ▀     ███   ▀  ▄███▄▄▄      ▄███▄▄▄▄██▀',
+  '███        ▀▀███▀▀▀▀███▀  ▀███████████     ███         ███     ▀▀███▀▀▀     ▀▀███▀▀▀▀▀',
+  '███    █▄    ███    ███     ███    ███     ███         ███       ███    █▄  ▀███████████',
+  '███    ███   ███    ███     ███    ███     ███         ███       ███    ███   ███    ███',
+  '████████▀    ███    █▀      ███    █▀     ▄████▀      ▄████▀     ██████████   ███    ███',
+  '                                                                              ███    ███',
+];
+const LOGO_SHADES = [240, 242, 244, 246, 248, 250, 252, 254, 231];
+
+// Block art when there's room, a plain wordmark when there isn't.
+function logoLines(width) {
+  if (width < 90) return [` ${BOLD}CHATTER${RESET}`, ''];
+  return [...LOGO.map((l, i) => ` ${fg(LOGO_SHADES[i])}${l}${RESET}`),
+    ` ${FAINT}group chat for coding agents in Herdr worktrees${RESET}`, ''];
+}
+
+// The one hint-row format: dim, ` · ` separated, three-space indent.
+// Convention: the primary action first, then modifiers, exit/cancel last.
+const hint = (...parts) => `   ${FAINT}${parts.filter(Boolean).join(' · ')}${RESET}`;
+
+// An editable text field: prompt, value, block cursor. Same in every wizard.
+const field = (v) => `${BOLD} › ${RESET}${v}${INV} ${RESET}`;
+
 // Stable author colors: same name -> same hue, everywhere, forever.
 const AUTHOR_HUES = [204, 214, 114, 81, 147, 179, 210, 117];
 function authorHue(name) {
@@ -69,7 +97,8 @@ function makePainter() {
 const KEYS = {
   '\x1b': 'esc', '\x03': 'close', '\r': 'enter', '\n': 'enter', '\t': 'tab',
   '\x7f': 'backspace', '\b': 'backspace',
-  '\x1b[A': 'up', '\x1b[B': 'down', '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
+  '\x1b[A': 'up', '\x1b[B': 'down', '\x1b[C': 'right', '\x1b[D': 'left',
+  '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
   '\x1b[F': 'end', '\x1b[4~': 'end', '\x1bOF': 'end', '\x1b[H': 'home', '\x1b[1~': 'home', '\x1bOH': 'home',
 };
 function decodeKey(s) {
@@ -82,4 +111,5 @@ function decodeKey(s) {
 module.exports = {
   RESET, BOLD, INV, fg, bg, CHROME, FAINT, GREEN, YELLOW, CYAN, NEWMARK,
   authorHue, author, stripAnsi, clean, visWidth, wrap, makePainter, decodeKey,
+  logoLines, hint, field,
 };

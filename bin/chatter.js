@@ -23,13 +23,19 @@ const [cmd, ...args] = argv;
 // Plugin entrypoints (run with plugin env, not by agents) and the board pane.
 const HOOKS = {
   _startup: c.hookStartup, _flush: c.hookFlush, _reap: c.hookReap,
-  _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat,
+  _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat, _open_chat_tab: c.hookOpenChatTab,
   _setup_action: s.hookOpenSetup, _setup_wizard: s.wizard,
   board: cmdBoard, _chat_view: cmdChatView, doctor: s.cmdDoctor,
 };
 if (Object.hasOwn(HOOKS, cmd ?? '')) { HOOKS[cmd](); return; }
 
-if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') { console.log(c.help()); return; }
+if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+  // Block art for a human at a terminal only: agents pipe `chatter help`
+  // constantly, and a logo in their context window is pure token noise.
+  if (process.stdout.isTTY) console.log(s.logoLines(process.stdout.columns || 100).join('\n'));
+  console.log(c.help());
+  return;
+}
 
 const COMMANDS = {
   agents: c.cmdAgents, send: c.cmdSend, inbox: c.cmdInbox, post: c.cmdPost, chat: c.cmdChat,

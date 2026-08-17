@@ -73,7 +73,7 @@ decides etiquette (channel mentions teach channel replies).
 The chat window (`ctrl+b alt+c` once keybound):
 
 ```
- #myrepo                                          [1 myrepo] [2 other]
+ #myrepo
    ── Sat Aug 16 ──
    codex · 09:41
      @marc deploy is green, session tests passing on agent/oauth-api
@@ -91,7 +91,10 @@ The chat window (`ctrl+b alt+c` once keybound):
 Stable per-author colors, grouped messages with word wrap, date and `── new ──`
 separators, local timestamps, `@mention` highlighting, a fixed input bar with
 `@`-completion (Tab) and post feedback (`✓ pushed to codex`), scrollable
-history, flicker-free rendering.
+history, flicker-free rendering. The header names only the repo you're in —
+the chat view never shows numbered universe tabs, because in the chat view
+digits are typing, and a tab you can't press is worse than no tab. An empty
+chat greets you with the wordmark and where to start.
 
 ---
 
@@ -215,12 +218,30 @@ fields to maintain — purpose lives in names the human already gave.
 - `--entrypoint chat`: the chat window (input line, scrolling, completion).
   Lines starting with `/` are **private slash commands** — rendered only for
   you, never posted: `/brief [today|2h|30m]`, `/brief share` (the one
-  explicit way to publish a brief to #chat), `/spawn <name> [kind]
-  [purpose...]`, `/clear`.
+  explicit way to publish a brief to #chat), `/spawn` (the wizard),
+  `/spawn <name> [kind] [purpose...]` (the fast path), `/team`, `/role`,
+  `/clear`.
 - `--entrypoint board`: read-only overview — agents with live status dots,
   role, branch, and current task; recent chat; tasks; shared memory.
 - Both follow the focused workspace's repo. The board switches repos with
-  number keys; in the chat view digits are typing (it stays on its repo).
+  number keys and shows a numbered tab per universe; the chat view stays on
+  its own repo (digits there are typing) and shows only its repo name.
+
+**Placement.** Views open as a session-modal popup by default. Pass
+`--placement tab` or `--placement split` to keep one open beside your work:
+
+```sh
+herdr plugin pane open --plugin chatter --entrypoint chat --placement tab
+herdr plugin action invoke chatter.open-chat-tab   # same thing, as an action
+```
+
+A persistent pane outlives Esc: there, Esc only cancels whatever is open (a
+wizard, a confirm card, the typed line) and **ctrl+c** closes the pane — the
+popup keeps closing on Esc as before. The hint row tells you which one you're
+looking at.
+
+`chatter help` prints the wordmark only when stdout is a terminal: agents pipe
+help constantly, and block art in their context window is pure token noise.
 
 ### Tests
 
@@ -278,9 +299,28 @@ the teammate in #chat, DMs its purpose (which doubles as chatter
 onboarding), and **verifies the newcomer actually joined this repo's
 universe**. Sharing the current checkout is an explicit exception —
 `--tab` — because shared files between coding agents is exactly what
-worktrees exist to prevent. In the chat window, `/spawn` shows the full
-plan first (handle, kind, code setup, purpose); an empty **Enter creates**,
-typing anything cancels.
+worktrees exist to prevent. In the chat window, `/spawn <name> …` shows the
+full plan first (handle, kind, code setup, purpose); an empty **Enter
+creates**, typing anything cancels. Spawning narrates itself — worktree or
+tab created, starting the agent (including "shell warming up" retries), agent
+up, purpose delivered, announced — in the window and on the CLI alike, because
+a minute of silence reads as a hang.
+
+### The wizards
+
+`/spawn` with **no arguments** takes over the chat view and asks instead:
+handle (checked for collisions as you type), kind (← → through the kinds your
+Herdr can actually start), worktree or shared-checkout tab, branch, purpose —
+then the same confirm card, then a live progress list.
+
+`/team` loops those questions to plan a whole roster ("add another? (y/N)"),
+shows one review card for the lot, and creates them in order. Purposes are
+deliberately **not** sent at spawn time: the team is created first, then one
+kickoff step ("kick off now? (Y/n)") DMs each teammate its purpose and posts a
+single roster brief to #chat, so the team meets itself all at once instead of
+trickling in. Decline the kickoff and the agents simply sit unbriefed until
+you `chatter send` them yourself. Esc anywhere in either wizard returns to the
+chat having created nothing.
 
 Spawn only: no kill/restart/lifecycle management (the output prints the
 `herdr worktree remove` cleanup line for later). Agents may spawn too —

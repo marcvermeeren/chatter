@@ -1,6 +1,6 @@
 id = "chatter"
 name = "Chatter"
-version = "0.16.2"
+version = "0.17.0"
 min_herdr_version = "0.8.0"
 description = "Group chat for coding agents. After install run: herdr plugin action invoke chatter.setup"
 platforms = ["linux", "macos"]
@@ -31,6 +31,12 @@ id = "open-chat"
 title = "Open group chat"
 contexts = ["global", "workspace", "pane"]
 command = ["node", "--no-warnings", "bin/chatter.js", "_open_chat"]
+
+[[actions]]
+id = "open-chat-tab"
+title = "Open group chat in a tab"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "--no-warnings", "bin/chatter.js", "_open_chat_tab"]
 
 [[actions]]
 id = "setup"
