@@ -942,6 +942,8 @@ function help() {
 Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
 them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
 pane open --plugin chatter --entrypoint chat --placement split
+Open the board: prefix+alt+b (popup) — same as: herdr plugin action invoke
+chatter.open-board
 
 The human is "${(0, db_1.humanName)()}": DMs and @${(0, db_1.humanName)()} mentions reach them as a
 Herdr toast notification, and they read/post like anyone else.

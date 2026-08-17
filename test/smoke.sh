@@ -438,12 +438,18 @@ grep -q 'command = "chatter.open-chat-tab"' "$SETHOME/.config/herdr/config.toml"
   && ok "tab keybinding written" || fail "tab keybinding written"
 grep -q 'key = "prefix+alt+t"' "$SETHOME/.config/herdr/config.toml" \
   && ok "tab keybinding uses prefix+alt+t" || fail "tab keybinding uses prefix+alt+t"
+grep -q 'command = "chatter.open-board"' "$SETHOME/.config/herdr/config.toml" \
+  && ok "board keybinding written" || fail "board keybinding written"
+grep -q 'key = "prefix+alt+b"' "$SETHOME/.config/herdr/config.toml" \
+  && ok "board keybinding uses prefix+alt+b" || fail "board keybinding uses prefix+alt+b"
 HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
 N=$(grep -c 'ui.toast' "$SETHOME/.config/herdr/config.toml")
 [ "$N" = "1" ] && ok "setup is idempotent (no duplicate blocks)" || fail "duplicate blocks after rerun ($N)"
 NC=$(grep -c 'command = "chatter.open-chat"' "$SETHOME/.config/herdr/config.toml")
 NT=$(grep -c 'command = "chatter.open-chat-tab"' "$SETHOME/.config/herdr/config.toml")
-[ "$NC" = "1" ] && [ "$NT" = "1" ] && ok "both keybindings stay singular on rerun" || fail "duplicate keybindings (popup=$NC tab=$NT)"
+NB=$(grep -c 'command = "chatter.open-board"' "$SETHOME/.config/herdr/config.toml")
+[ "$NC" = "1" ] && [ "$NT" = "1" ] && [ "$NB" = "1" ] \
+  && ok "all keybindings stay singular on rerun" || fail "duplicate keybindings (popup=$NC tab=$NT board=$NB)"
 
 # Each binding is judged on its own: a taken tab key must not block the popup
 # one, and must never overwrite the key its owner already claimed.
@@ -476,6 +482,7 @@ echo "# help documents how to open the chat"
 $CH help | grep -q "chatter.open-chat-tab" && ok "help names the tab action" || fail "help names the tab action"
 $CH help | grep -q "placement split" && ok "help names --placement split" || fail "help names --placement split"
 $CH help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
+$CH help | grep -q "prefix+alt+b" && ok "help names the board keybinding" || fail "help names the board keybinding"
 CHATTER_ENTRY="$CHATTER_ENTRY" CHATTER_SOURCE_ENTRY="$CHATTER_ENTRY" node --no-warnings --experimental-sqlite "$ROOT/test/surface.js" >/dev/null \
   && ok "public command/hook/manifest surface is complete" || fail "public command/hook/manifest surface is complete"
 

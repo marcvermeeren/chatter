@@ -26,6 +26,7 @@ test('setup and chat wizard state transitions stay explicit', () => {
   assert.equal(nextSetupStep(1), 2);
   assert.equal(nextSetupStep(2), 3);
   assert.equal(nextSetupStep(3), 4);
+  assert.equal(nextSetupStep(4), 5);
   assert.equal(nextWizardStep('handle'), 'kind');
   assert.equal(nextWizardStep('kind'), 'setup');
   assert.equal(nextWizardStep('setup', { tab: false }), 'branch');

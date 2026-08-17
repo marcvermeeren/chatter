@@ -27,6 +27,7 @@ const tui_1 = require("../src/tui");
     strict_1.default.equal((0, setup_1.nextSetupStep)(1), 2);
     strict_1.default.equal((0, setup_1.nextSetupStep)(2), 3);
     strict_1.default.equal((0, setup_1.nextSetupStep)(3), 4);
+    strict_1.default.equal((0, setup_1.nextSetupStep)(4), 5);
     strict_1.default.equal((0, board_1.nextWizardStep)('handle'), 'kind');
     strict_1.default.equal((0, board_1.nextWizardStep)('kind'), 'setup');
     strict_1.default.equal((0, board_1.nextWizardStep)('setup', { tab: false }), 'branch');
