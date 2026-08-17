@@ -44,6 +44,7 @@ exports.headerBar = headerBar;
 exports.buildFeedLines = buildFeedLines;
 exports.nextWizardStep = nextWizardStep;
 exports.chatEscapeAction = chatEscapeAction;
+exports.renderBoard = renderBoard;
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
 const node_path_1 = __importDefault(require("node:path"));
@@ -644,14 +645,19 @@ function runSlash(body, d, ui, _paint) {
         ] };
 }
 // -------------------------------------------------------------------- board
+const compactBoardText = (value, width) => {
+    const text = T.clean(value).replace(/\s+/g, ' ').trim();
+    if ([...text].length <= width)
+        return text;
+    return [...text].slice(0, Math.max(0, width - 1)).join('') + '…';
+};
 function renderBoard(d, file) {
     const width = process.stdout.columns || 100;
     const height = process.stdout.rows || 30;
     const live = (0, team_1.teamAgents)(d, { fresh: true });
     const agents = d.prepare('SELECT * FROM agents WHERE departed_at IS NULL ORDER BY name').all();
     const tasks = d.prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id LIMIT 8").all();
-    const notes = d.prepare("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 6").all();
-    const msgs = d.prepare("SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC LIMIT 10").all().reverse();
+    const notes = d.prepare("SELECT * FROM notes WHERE status = 'active' AND type != 'question' ORDER BY id DESC LIMIT 6").all();
     const taskBy = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress' && t.assignee).map((t) => [t.assignee, t]));
     const openQ = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get()?.n ?? 0;
     const dot = {
@@ -659,8 +665,6 @@ function renderBoard(d, file) {
         unknown: T.FAINT, offline: T.FAINT,
     };
     const out = [headerBar(file, width)];
-    if (openQ)
-        out.push(` ${T.YELLOW}${openQ} open question${openQ > 1 ? 's' : ''}${T.RESET}`);
     out.push('', ` ${T.BOLD}Agents${T.RESET}`);
     if (!agents.length)
         out.push(`   ${T.FAINT}(none registered yet)${T.RESET}`);
@@ -670,21 +674,19 @@ function renderBoard(d, file) {
         const t = taskBy[a.name];
         out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(rosterIdentity(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
     }
-    out.push('', ` ${T.BOLD}Group chat${T.RESET}`);
-    if (!msgs.length)
-        out.push(`   ${T.FAINT}(no posts yet)${T.RESET}`);
-    for (const m of msgs)
-        out.push(`  ${T.CHROME}${localHM(m.created_at)}${T.RESET} ${T.author(m.from_agent)}: ${highlightMentions(T.clean(m.body), (0, db_1.humanName)())}`.slice(0, width + 60));
     out.push('', ` ${T.BOLD}Tasks${T.RESET}`);
     if (!tasks.length)
         out.push(`   ${T.FAINT}(none)${T.RESET}`);
     for (const t of tasks)
         out.push('  ' + (0, commands_1.taskLabel)(t));
+    out.push('', ` ${T.BOLD}Open questions${T.RESET}  ${openQ ? T.YELLOW : T.FAINT}${openQ}${T.RESET}`);
     out.push('', ` ${T.BOLD}Shared memory${T.RESET}`);
     if (!notes.length)
         out.push(`   ${T.FAINT}(empty)${T.RESET}`);
-    for (const n of notes)
-        out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${T.clean(n.text)}`.slice(0, width + 60));
+    for (const n of notes) {
+        const prefix = `  #${n.id} [${n.type}] ${n.author}: `;
+        out.push(`  ${T.CHROME}#${n.id} [${n.type}]${T.RESET} ${T.author(n.author)}: ${compactBoardText(n.text, Math.max(12, width - prefix.length))}`);
+    }
     out.push('', T.hint('q closes'));
     return out.slice(0, height);
 }

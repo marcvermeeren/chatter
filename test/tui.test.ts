@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
-  buildFeedLines, chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd, rosterIdentity,
+  buildFeedLines, chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd, renderBoard, rosterIdentity,
   viewRepoCwd,
 } from '../src/board';
+import { openDbFile } from '../src/db';
 import { pluginInvocationContext } from '../src/herdr';
 import { nextSetupStep } from '../src/setup';
 import { manifestVersion, runUpdate } from '../src/update';
@@ -95,6 +99,29 @@ test('view header names only its repository', () => {
   const header = stripAnsi(headerBar('/state/repos/alpha-11111111/chatter.db', 80));
   assert.match(header, /#alpha/);
   assert.doesNotMatch(header, /\[\d+ /);
+});
+
+test('board is a compact overview ordered by agents, tasks, questions, then memory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatter-board-'));
+  const file = path.join(dir, 'chatter.db');
+  const d = openDbFile(file);
+  try {
+    d.prepare("INSERT INTO messages (from_agent, to_agent, body, kind, created_at) VALUES ('marc', '#chat', 'chat belongs elsewhere', 'chat', '2026-01-01 00:00:00')").run();
+    d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'question', 'question details stay out of the board', 'active', '2026-01-01 00:00:00')").run();
+    d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'decision', 'keep the board compact', 'active', '2026-01-01 00:00:01')").run();
+    const lines = renderBoard(d, file).map(stripAnsi);
+    const agents = lines.findIndex((line) => line.trim() === 'Agents');
+    const tasks = lines.findIndex((line) => line.trim() === 'Tasks');
+    const questions = lines.findIndex((line) => line.trim() === 'Open questions  1');
+    const memory = lines.findIndex((line) => line.trim() === 'Shared memory');
+    assert.ok(agents < tasks && tasks < questions && questions < memory);
+    assert.ok(lines.some((line) => line.includes('keep the board compact')));
+    assert.ok(lines.every((line) => !line.includes('Group chat')));
+    assert.ok(lines.every((line) => !line.includes('chat belongs elsewhere')));
+    assert.ok(lines.every((line) => !line.includes('question details stay out of the board')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('plugin views require an explicit focused repository context', () => {
