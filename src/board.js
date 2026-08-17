@@ -7,7 +7,7 @@ const path = require('node:path');
 const { matchLive, herdr } = require('./herdr');
 const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
 const { postToChat, teamAgents, sendMessage, nameTaken } = require('./team');
-const { taskLabel, buildBrief, spawnAgent, setRole, identity } = require('./commands');
+const { taskLabel, buildBrief, spawnAgent, setRole } = require('./commands');
 const { sanitizeName } = require('./team');
 
 // Colored identity for TUI rows: dim display label, colored @handle.
