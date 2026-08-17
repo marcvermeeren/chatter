@@ -681,7 +681,7 @@ export function spawnAgent(
   // worktrees isolate code. --tab shares this checkout (explicit exception,
   // fine for reviewers/helpers that don't write files).
   let pane: string;
-  let cleanup: (() => unknown) | null;
+  let cleanup: (() => HerdrResult) | null;
   let whereLine: string;
   if (tab) {
     const tabArgs = ['tab', 'create', '--label', name, '--cwd', repoRoot, '--no-focus'];

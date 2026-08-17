@@ -20,6 +20,7 @@ const tui_1 = require("../src/tui");
 (0, node_test_1.default)('raw terminal keys decode into an explicit union', () => {
     strict_1.default.deepEqual((0, tui_1.decodeKey)('\x1b[A'), { type: 'up' });
     strict_1.default.deepEqual((0, tui_1.decodeKey)('x'), { type: 'text', text: 'x' });
+    strict_1.default.deepEqual((0, tui_1.decodeKey)('toString'), { type: 'text', text: 'toString' });
     strict_1.default.deepEqual((0, tui_1.decodeKey)('\x1b[99~'), { type: 'other' });
 });
 (0, node_test_1.default)('setup and chat wizard state transitions stay explicit', () => {

@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { PLUGIN_ID, HERDR } from './herdr';
 import { die } from './util';
 import type { ChatterDb, FileRow, GitInfo } from './types';
@@ -126,12 +126,17 @@ export function openDbFile(file: string): ChatterDb {
     exec: (sql) => d.exec(sql),
     prepare: <Row extends object = Record<string, never>>(sql: string) => {
       const statement = d.prepare(sql);
+      const all = (...params: SQLInputValue[]): Row[] => {
+        // SAFETY: node:sqlite cannot infer a row from SQL text. The query owner
+        // supplies Row, and SQLite returns one plain object for each result row.
+        return statement.all(...params) as Row[];
+      };
       return {
-        all: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params) as Row[],
+        all,
         // `all()[0]` avoids Node 22.5's null-filled phantom `get()` row while
         // preserving legitimate rows (including aggregate rows containing null).
-        get: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params)[0] as Row | undefined,
-        run: (...params: import('node:sqlite').SQLInputValue[]) => statement.run(...params),
+        get: (...params: SQLInputValue[]) => all(...params)[0],
+        run: (...params: SQLInputValue[]) => statement.run(...params),
       };
     },
   };

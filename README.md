@@ -474,6 +474,11 @@ the committed artifacts and manifest targets. Runtime dependencies must stay
 empty. TypeScript under `src/` and `bin/` is the only hand-edited application
 source; generated files under `dist/` must come from `bun run build`.
 
+Keep type evidence close to the code: use `unknown` only at real I/O boundaries
+and narrow it promptly with named guards; prefer `satisfies` for fixed maps and
+registries; never chain assertions or widen a value only to cast it back. Give
+any unavoidable assertion an adjacent comment stating its checked invariant.
+
 Before a release, run `bun install --frozen-lockfile && bun run check`, review
 the rebuilt `dist/`, and commit source and generated output together. CI tests
 the build on supported Node versions on Linux and macOS.

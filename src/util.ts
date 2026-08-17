@@ -14,7 +14,12 @@ export function parseFlags<const Defs extends Record<string, FlagDefault>>(
   args: readonly string[],
   defs: Defs,
 ): ParsedFlags<Defs> {
+  // SAFETY: every definition key starts with its declared default, `_` is
+  // always a string array, and the parser only writes the matching flag kind.
   const out = { _: [], ...defs } as ParsedFlags<Defs>;
+  // SAFETY: writes are limited to definition keys checked below; boolean
+  // defaults receive booleans and every other default receives a string.
+  const writable = out as Record<string, FlagDefault | string[]>;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === undefined) continue;
@@ -22,12 +27,12 @@ export function parseFlags<const Defs extends Record<string, FlagDefault>>(
       const key = a.slice(2);
       if (!(key in defs)) die(`unknown flag ${a}`);
       if (typeof defs[key] === 'boolean') {
-        (out as Record<string, unknown>)[key] = true;
+        writable[key] = true;
         continue;
       }
       const val = args[++i];
       if (val === undefined || val.startsWith('--')) die(`flag --${key} requires a value`);
-      (out as Record<string, unknown>)[key] = val;
+      writable[key] = val;
     } else out._.push(a);
   }
   return out;

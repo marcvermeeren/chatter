@@ -10,7 +10,12 @@ exports.fmtDur = fmtDur;
 function die(msg) { console.error(msg); process.exit(1); }
 // argv flags: defs with a boolean default are switches; others consume a value.
 function parseFlags(args, defs) {
+    // SAFETY: every definition key starts with its declared default, `_` is
+    // always a string array, and the parser only writes the matching flag kind.
     const out = { _: [], ...defs };
+    // SAFETY: writes are limited to definition keys checked below; boolean
+    // defaults receive booleans and every other default receives a string.
+    const writable = out;
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (a === undefined)
@@ -20,13 +25,13 @@ function parseFlags(args, defs) {
             if (!(key in defs))
                 die(`unknown flag ${a}`);
             if (typeof defs[key] === 'boolean') {
-                out[key] = true;
+                writable[key] = true;
                 continue;
             }
             const val = args[++i];
             if (val === undefined || val.startsWith('--'))
                 die(`flag --${key} requires a value`);
-            out[key] = val;
+            writable[key] = val;
         }
         else
             out._.push(a);
