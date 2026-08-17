@@ -24,17 +24,24 @@ const TOAST_BLOCK = `
 [ui.toast]
 delivery = "herdr"
 `;
-const keyBlock = (key) => `
+const keyBlock = (key, action, description) => `
 # added by chatter setup
 [[keys.command]]
 key = "${key}"
 type = "plugin_action"
-command = "${PLUGIN_ID}.open-chat"
-description = "group chat"
+command = "${PLUGIN_ID}.${action}"
+description = "${description}"
 `;
 
+// Is this exact plugin action already bound? The closing quote matters:
+// "chatter.open-chat" is a prefix of "chatter.open-chat-tab", so a substring
+// test would report the popup bound when only the tab binding exists.
+const actionBound = (text, action) =>
+  new RegExp(`command\\s*=\\s*"${escRe(`${PLUGIN_ID}.${action}`)}"`).test(text);
+
 // Apply toast/keybinding config; returns human-readable report lines.
-function editHerdrConfig({ toasts, key }) {
+// Each binding is decided independently: already bound, key taken, or added.
+function editHerdrConfig({ toasts, key, tabKey = null }) {
   const file = configToml();
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { /* new file */ }
@@ -44,11 +51,21 @@ function editHerdrConfig({ toasts, key }) {
     if (/^\s*\[ui\.toast\]/m.test(text)) report.push('toasts: existing [ui.toast] setting respected');
     else { out += TOAST_BLOCK; report.push('toasts: enabled (delivery = "herdr")'); }
   }
-  if (key) {
-    if (text.includes(`${PLUGIN_ID}.open-chat`)) report.push('keybinding: already bound — left as is');
-    else if (new RegExp(`^\\s*key\\s*=\\s*"${escRe(key)}"`, 'm').test(text)) {
-      report.push(`keybinding: "${key}" is already in use — skipped (bind manually)`);
-    } else { out += keyBlock(key); report.push(`keybinding: ${key} → open chat`); }
+  const bindings = [
+    { key, action: 'open-chat', description: 'group chat', label: 'keybinding', what: 'open chat' },
+    { key: tabKey, action: 'open-chat-tab', description: 'group chat tab', label: 'tab keybinding', what: 'open chat in a tab' },
+  ];
+  for (const b of bindings) {
+    if (!b.key) continue;
+    // Checked against `out`, not `text`: a key this same run just claimed is
+    // as taken as one that was already in the file.
+    if (actionBound(out, b.action)) report.push(`${b.label}: already bound — left as is`);
+    else if (new RegExp(`^\\s*key\\s*=\\s*"${escRe(b.key)}"`, 'm').test(out)) {
+      report.push(`${b.label}: "${b.key}" is already in use — skipped (bind manually)`);
+    } else {
+      out += keyBlock(b.key, b.action, b.description);
+      report.push(`${b.label}: ${b.key} → ${b.what}`);
+    }
   }
   if (out !== text) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -89,7 +106,11 @@ function doctorChecks() {
   try { cfg = fs.readFileSync(configToml(), 'utf8'); } catch { /* none */ }
   add(/\[ui\.toast\]/.test(cfg) && !/delivery\s*=\s*"off"/.test(cfg),
     'toast notifications enabled', 'run: chatter setup (adds [ui.toast] delivery = "herdr")');
-  add(cfg.includes(`${PLUGIN_ID}.open-chat`), 'chat window keybinding bound', 'run: chatter setup (adds a [[keys.command]] block)');
+  add(actionBound(cfg, 'open-chat'), 'chat window keybinding bound', 'run: chatter setup (adds a [[keys.command]] block)');
+  // The tab binding is a convenience, not a requirement: ✓ when bound, a dim
+  // note when not — never a reported problem.
+  const tabBound = actionBound(cfg, 'open-chat-tab');
+  add(tabBound || null, tabBound ? 'chat tab keybinding bound' : 'chat tab keybinding not bound (optional — run: chatter setup)');
   const g = gitInfo();
   add(null, g.repoRoot ? `current repo: ${path.basename(g.repoRoot)}` : 'not inside a git repo (chatter is per-repo)');
   // session-wide by design: doctor is a machine-level diagnostic
@@ -117,7 +138,7 @@ function cmdDoctor() {
 
 // -------------------------------------------------------------------- apply
 
-function applySetup({ name, toasts, key }) {
+function applySetup({ name, toasts, key, tabKey = null }) {
   const report = [];
   if (name) {
     fs.mkdirSync(configRoot(), { recursive: true });
@@ -127,7 +148,7 @@ function applySetup({ name, toasts, key }) {
   const { ensurePointerAndSymlink } = require('./commands');
   ensurePointerAndSymlink();
   report.push('chatter linked into ~/.local/bin');
-  report.push(...editHerdrConfig({ toasts, key }));
+  report.push(...editHerdrConfig({ toasts, key, tabKey }));
   if (toasts) {
     const r = herdr(['notification', 'show', 'chatter', '--body', `hi ${name || humanName()} — notifications work`, '--sound', 'done']);
     report.push(r.ok && r.json && r.json.result.shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
@@ -144,12 +165,16 @@ const defaultName = () => {
 
 function cmdSetup(me, args) {
   if (!me.human) die('chatter setup is human-only');
-  const opts = parseFlags(args, { yes: false, name: null, key: 'prefix+alt+c', 'no-toasts': false, 'no-keybind': false });
+  const opts = parseFlags(args, {
+    yes: false, name: null, key: 'prefix+alt+c', 'tab-key': 'prefix+alt+t',
+    'no-toasts': false, 'no-keybind': false,
+  });
   const width = process.stdout.columns || 100;
   console.log(logoLines(width).join('\n'));
   if (!opts.yes) {
     die('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
-      + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"] [--no-toasts] [--no-keybind]');
+      + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"]\n'
+      + '                       [--tab-key "prefix+alt+t"] [--no-toasts] [--no-keybind]');
   }
   const name = (opts.name || defaultName()).toLowerCase();
   const taken = nameTaken(name);
@@ -159,17 +184,19 @@ function cmdSetup(me, args) {
     name: taken ? null : name,
     toasts: !opts['no-toasts'],
     key: opts['no-keybind'] ? null : opts.key,
+    tabKey: opts['no-keybind'] ? null : opts['tab-key'],
   });
   console.log(report.map((l) => `   ${T.GREEN}✓${T.RESET}  ${l}`).join('\n'));
   console.log('');
   const checks = doctorChecks();
   console.log(renderChecks(checks).join('\n'));
-  console.log(`\nopen the chat window: ${T.BOLD}${opts.key}${T.RESET} (or: herdr plugin pane open --plugin ${PLUGIN_ID} --entrypoint chat)`);
+  console.log(`\nopen the chat: ${T.BOLD}${opts.key}${T.RESET} as a popup · ${T.BOLD}${opts['tab-key']}${T.RESET} as a tab`
+    + `\n(or: herdr plugin pane open --plugin ${PLUGIN_ID} --entrypoint chat [--placement tab|split])`);
 }
 
 // ----------------------------------------------------------- wizard (popup)
 
-const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, DONE: 3 };
+const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 };
 
 function wizard() {
   const painter = T.makePainter();
@@ -179,6 +206,7 @@ function wizard() {
     name: defaultName(),
     toasts: true,
     key: 'prefix+alt+c',
+    tabKey: 'prefix+alt+t',
     error: '',
     report: null,
     checks: null,
@@ -201,8 +229,13 @@ function wizard() {
         : `   ${state.toasts ? `${T.GREEN}● enabled${T.RESET}` : `${T.FAINT}○ disabled${T.RESET}`}  ${T.FAINT}(y/n toggles)${T.RESET}`);
       out.push('', T.hint('Enter continues', 'Esc aborts'));
     } else if (state.step === STEPS.KEY) {
-      out.push(`   keybinding to open the chat window ${T.FAINT}(clear the field to skip)${T.RESET}`);
+      out.push(`   keybinding to open the chat as a popup ${T.FAINT}(clear the field to skip)${T.RESET}`);
       out.push('   ' + field(state.key));
+      out.push('', T.hint('Enter continues', 'Esc aborts'));
+    } else if (state.step === STEPS.TABKEY) {
+      out.push(`   keybinding to open the chat in a tab ${T.FAINT}(a pane that stays open — clear to skip)${T.RESET}`);
+      out.push('   ' + field(state.tabKey));
+      out.push(`   ${T.FAINT}popup: ${state.key.trim() || '(skipped)'}${T.RESET}`);
       out.push('', T.hint('Enter applies everything', 'Esc aborts'));
     } else {
       out.push(...(state.report || []).map((l) => `   ${T.GREEN}✓${T.RESET}  ${l}`));
@@ -232,11 +265,16 @@ function wizard() {
     } else if (state.step === STEPS.KEY) {
       if (key.type === 'backspace') state.key = state.key.slice(0, -1);
       else if (key.type === 'text') state.key += key.text;
+      else if (key.type === 'enter') state.step = STEPS.TABKEY;
+    } else if (state.step === STEPS.TABKEY) {
+      if (key.type === 'backspace') state.tabKey = state.tabKey.slice(0, -1);
+      else if (key.type === 'text') state.tabKey += key.text;
       else if (key.type === 'enter') {
         state.report = applySetup({
           name: state.name,
           toasts: state.toasts && !state.toastsExisting,
           key: state.key.trim() || null,
+          tabKey: state.tabKey.trim() || null,
         });
         state.checks = doctorChecks();
         state.step = STEPS.DONE;
@@ -258,4 +296,4 @@ function hookOpenSetup() {
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
 
-module.exports = { cmdDoctor, cmdSetup, wizard, hookOpenSetup, logoLines };
+module.exports = { cmdDoctor, cmdSetup, wizard, hookOpenSetup, logoLines, editHerdrConfig };

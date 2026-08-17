@@ -781,6 +781,10 @@ function help() {
   chatter whoami
   chatter iam <name>                    set the human's chat name (human only)
 
+Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
+them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
+pane open --plugin chatter --entrypoint chat --placement split
+
 The human is "${humanName()}": DMs and @${humanName()} mentions reach them as a
 Herdr toast notification, and they read/post like anyone else.
 

@@ -107,18 +107,25 @@ chat greets you with the wordmark and where to start.
 herdr plugin action invoke chatter.setup
 ```
 
-The wizard prefills your name from your OS user, enables toasts and binds the
-chat window (`prefix+alt+c` by default) by appending to
-`~/.config/herdr/config.toml` — with a timestamped backup, respecting any
-existing `[ui.toast]` section and detecting keybinding conflicts — then
-reloads Herdr's config so everything is active immediately, symlinks
-`chatter` into `~/.local/bin`, fires a test toast, and shows a ✓ checklist.
+The wizard prefills your name from your OS user, enables toasts and binds
+**two** keys by appending to `~/.config/herdr/config.toml` —
+`prefix+alt+c` opens the chat as a popup, `prefix+alt+t` opens it as a
+persistent tab — with a timestamped backup, respecting any existing
+`[ui.toast]` section and detecting keybinding conflicts per binding (each key
+is decided on its own: already bound, key taken, or added), then reloads
+Herdr's config so everything is active immediately, symlinks `chatter` into
+`~/.local/bin`, fires a test toast, and shows a ✓ checklist.
 
 Scripting a second machine? Non-interactive:
 
 ```sh
-chatter setup --yes [--name marc] [--key "prefix+alt+c"] [--no-toasts] [--no-keybind]
+chatter setup --yes [--name marc] [--key "prefix+alt+c"] [--tab-key "prefix+alt+t"] \
+  [--no-toasts] [--no-keybind]
 ```
+
+`--no-keybind` skips both keys; either key can be pointed somewhere else, and
+a key already used by something else is skipped with a note rather than
+overwritten.
 
 ### Troubleshooting
 

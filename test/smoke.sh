@@ -251,14 +251,48 @@ cd "$REPO"
 HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1 && ok "setup --yes runs" || fail "setup --yes runs"
 grep -q 'ui.toast' "$SETHOME/.config/herdr/config.toml" && ok "toast block written" || fail "toast block written"
 grep -q 'chatter.open-chat' "$SETHOME/.config/herdr/config.toml" && ok "keybinding written" || fail "keybinding written"
+grep -q 'command = "chatter.open-chat-tab"' "$SETHOME/.config/herdr/config.toml" \
+  && ok "tab keybinding written" || fail "tab keybinding written"
+grep -q 'key = "prefix+alt+t"' "$SETHOME/.config/herdr/config.toml" \
+  && ok "tab keybinding uses prefix+alt+t" || fail "tab keybinding uses prefix+alt+t"
 HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
 N=$(grep -c 'ui.toast' "$SETHOME/.config/herdr/config.toml")
 [ "$N" = "1" ] && ok "setup is idempotent (no duplicate blocks)" || fail "duplicate blocks after rerun ($N)"
+NC=$(grep -c 'command = "chatter.open-chat"' "$SETHOME/.config/herdr/config.toml")
+NT=$(grep -c 'command = "chatter.open-chat-tab"' "$SETHOME/.config/herdr/config.toml")
+[ "$NC" = "1" ] && [ "$NT" = "1" ] && ok "both keybindings stay singular on rerun" || fail "duplicate keybindings (popup=$NC tab=$NT)"
+
+# Each binding is judged on its own: a taken tab key must not block the popup
+# one, and must never overwrite the key its owner already claimed.
+CONFHOME="$TMP/confhome"; mkdir -p "$CONFHOME/.config/herdr" "$CONFHOME/.local/bin"
+printf '[[keys.command]]\nkey = "prefix+alt+t"\ntype = "spawn_tab"\ndescription = "mine"\n' \
+  > "$CONFHOME/.config/herdr/config.toml"
+CONF_OUT=$(HOME="$CONFHOME" $CH setup --yes --name smoketester 2>&1)
+echo "$CONF_OUT" | grep -q 'already in use' && ok "occupied tab key is reported, not stolen" || fail "occupied tab key not reported"
+grep -q 'chatter.open-chat-tab' "$CONFHOME/.config/herdr/config.toml" && fail "tab binding written over an occupied key" || ok "tab binding skipped when its key is taken"
+grep -q 'command = "chatter.open-chat"' "$CONFHOME/.config/herdr/config.toml" \
+  && ok "popup binding still written despite the tab conflict" || fail "popup binding blocked by tab conflict"
+grep -q 'type = "spawn_tab"' "$CONFHOME/.config/herdr/config.toml" && ok "the other owner's binding survived" || fail "existing binding clobbered"
 printf '[ui.toast]\ndelivery = "off"\n' > "$SETHOME/.config/herdr/config.toml"
 HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
 grep -q 'delivery = "off"' "$SETHOME/.config/herdr/config.toml" && ok "existing [ui.toast] respected" || fail "existing [ui.toast] overwritten"
 $CH doctor >/dev/null 2>&1; RC=$?
 [ "$RC" = "0" ] || [ "$RC" = "1" ] && ok "doctor runs (exit $RC)" || fail "doctor crashed"
+# Both bindings reported, each judged on its own config.
+HOME="$SETHOME" $CH doctor 2>&1 | grep -q "chat tab keybinding bound" \
+  && ok "doctor confirms a bound tab keybinding" || fail "doctor confirms a bound tab keybinding"
+HOME="$CONFHOME" $CH doctor 2>&1 | grep -q "chat tab keybinding not bound" \
+  && ok "doctor notes a missing tab keybinding" || fail "doctor notes a missing tab keybinding"
+# A missing tab binding is a note, not a problem: it must not fail doctor on
+# its own — CONFHOME has the popup binding written, so the tab line is the
+# only keybinding-related difference.
+HOME="$CONFHOME" $CH doctor 2>&1 | grep -q "✗.*chat tab keybinding" \
+  && fail "missing tab binding rendered as a failure" || ok "missing tab binding is hint-level, not a failure"
+
+echo "# help documents how to open the chat"
+$CH help | grep -q "chatter.open-chat-tab" && ok "help names the tab action" || fail "help names the tab action"
+$CH help | grep -q "placement split" && ok "help names --placement split" || fail "help names --placement split"
+$CH help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
 
 echo
 echo "$PASS passed, $FAIL failed"
