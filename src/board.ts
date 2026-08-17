@@ -15,10 +15,11 @@ import type {
 } from './types';
 
 // Colored identity for TUI rows: dim display label, colored @handle.
-function identityColored(name: string, role: string | null | undefined): string {
+export function rosterIdentity(name: string, role: string | null | undefined): string {
   const label = (role || '').trim();
-  if (!label || sanitizeName(label) === name) return `${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
-  return `${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+  const avatar = `${T.agentAvatar(name)} `;
+  if (!label || sanitizeName(label) === name) return `${avatar}${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+  return `${avatar}${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
 }
 const padVis = (s: string, w: number): string => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
 
@@ -83,7 +84,7 @@ function feedRows(d: ChatterDb): MessageRow[] {
     ORDER BY id DESC LIMIT 500`).all().reverse();
 }
 
-function buildFeedLines(rows: readonly MessageRow[], width: number, human: string, openPointer: number): string[] {
+export function buildFeedLines(rows: readonly MessageRow[], width: number, human: string, openPointer: number): string[] {
   const lines: string[] = [];
   const bodyW = Math.max(20, width - 8);
   const center = (label: string, color: string): void => {
@@ -108,12 +109,12 @@ function buildFeedLines(rows: readonly MessageRow[], width: number, human: strin
       const you = m.from_agent === human ? ` ${T.FAINT}(you)${T.RESET}` : '';
       let head;
       if (!isDM) {
-        head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
+        head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
       } else if (mine) {
-        head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
+        head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
       } else {
         // Agent-to-agent DM: both names colored, visibly quieter.
-        head = `  ${T.author(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
+        head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
       }
       lines.push(head);
     }
@@ -607,7 +608,7 @@ function renderBoard(d: ChatterDb, file: string): string[] {
     const l = matchLive(live, a);
     const st = l?.agent_status ?? 'offline';
     const t = taskBy[a.name];
-    out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(identityColored(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
+    out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(rosterIdentity(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
   }
   out.push('', ` ${T.BOLD}Group chat${T.RESET}`);
   if (!msgs.length) out.push(`   ${T.FAINT}(no posts yet)${T.RESET}`);

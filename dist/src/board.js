@@ -37,8 +37,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.cmdChatView = exports.cmdBoard = void 0;
+exports.rosterIdentity = rosterIdentity;
 exports.pluginContextCwd = pluginContextCwd;
 exports.headerBar = headerBar;
+exports.buildFeedLines = buildFeedLines;
 exports.nextWizardStep = nextWizardStep;
 exports.chatEscapeAction = chatEscapeAction;
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
@@ -51,11 +53,12 @@ const commands_1 = require("./commands");
 const util_1 = require("./util");
 const T = __importStar(require("./tui"));
 // Colored identity for TUI rows: dim display label, colored @handle.
-function identityColored(name, role) {
+function rosterIdentity(name, role) {
     const label = (role || '').trim();
+    const avatar = `${T.agentAvatar(name)} `;
     if (!label || (0, team_1.sanitizeName)(label) === name)
-        return `${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
-    return `${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+        return `${avatar}${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
+    return `${avatar}${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
 }
 const padVis = (s, w) => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
 // ------------------------------------------------------------- repo context
@@ -146,14 +149,14 @@ function buildFeedLines(rows, width, human, openPointer) {
             const you = m.from_agent === human ? ` ${T.FAINT}(you)${T.RESET}` : '';
             let head;
             if (!isDM) {
-                head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
+                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you}`;
             }
             else if (mine) {
-                head = `  ${T.author(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
+                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}· ${localHM(m.created_at)}${T.RESET}${you} ${T.CYAN}[DM → ${m.to_agent === human ? 'you' : m.to_agent}]${T.RESET}`;
             }
             else {
                 // Agent-to-agent DM: both names colored, visibly quieter.
-                head = `  ${T.author(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
+                head = `  ${T.authorWithAvatar(m.from_agent)} ${T.CHROME}→${T.RESET} ${T.author(m.to_agent)} ${T.CHROME}· ${localHM(m.created_at)} [DM]${T.RESET}`;
             }
             lines.push(head);
         }
@@ -655,7 +658,7 @@ function renderBoard(d, file) {
         const l = (0, herdr_1.matchLive)(live, a);
         const st = l?.agent_status ?? 'offline';
         const t = taskBy[a.name];
-        out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(identityColored(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
+        out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(rosterIdentity(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
     }
     out.push('', ` ${T.BOLD}Group chat${T.RESET}`);
     if (!msgs.length)

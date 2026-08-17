@@ -17,6 +17,40 @@ const tui_1 = require("../src/tui");
     strict_1.default.equal((0, tui_1.visWidth)('\x1b[1mhello\x1b[0m'), 5);
     strict_1.default.equal((0, tui_1.stripAnsi)('\x1b[1mhello\x1b[0m'), 'hello');
 });
+(0, node_test_1.default)('agent avatars are curated, fixed-width, and deterministic', () => {
+    strict_1.default.equal(tui_1.AGENT_FACES.length, 32);
+    strict_1.default.equal(new Set(tui_1.AGENT_FACES).size, tui_1.AGENT_FACES.length);
+    for (const face of tui_1.AGENT_FACES) {
+        strict_1.default.match(face, /^[\x20-\x7e]{5}$/);
+        strict_1.default.equal((0, tui_1.visWidth)(face), 5);
+    }
+    strict_1.default.equal((0, tui_1.agentFace)('codex'), (0, tui_1.agentFace)('codex'));
+    strict_1.default.ok(new Set(['codex', 'claude', 'pi', 'opencode', 'gemini', 'cursor']
+        .map(tui_1.agentFace)).size >= 4);
+});
+(0, node_test_1.default)('agent avatars reuse the existing author color and remain legible without ANSI', () => {
+    const name = 'codex';
+    strict_1.default.ok((0, tui_1.agentAvatar)(name).startsWith((0, tui_1.fg)((0, tui_1.authorHue)(name))));
+    strict_1.default.equal((0, tui_1.stripAnsi)((0, tui_1.agentAvatar)(name)), (0, tui_1.agentFace)(name));
+    strict_1.default.equal((0, tui_1.stripAnsi)((0, tui_1.authorWithAvatar)(name)), `${(0, tui_1.agentFace)(name)} ${name}`);
+    strict_1.default.equal((0, tui_1.visWidth)((0, tui_1.authorWithAvatar)(name)), 5 + 1 + name.length);
+});
+(0, node_test_1.default)('board roster and chat headers render the assigned avatar', () => {
+    strict_1.default.equal((0, tui_1.stripAnsi)((0, board_1.rosterIdentity)('codex', 'frontend')), `${(0, tui_1.agentFace)('codex')} frontend · @codex`);
+    const message = {
+        id: 1,
+        from_agent: 'codex',
+        to_agent: '#chat',
+        body: 'deploy is green',
+        kind: 'chat',
+        ref_id: null,
+        created_at: '2026-01-01 09:41:00',
+        delivered_at: null,
+        read_at: null,
+    };
+    const rendered = (0, board_1.buildFeedLines)([message], 80, 'marc', 0).map(tui_1.stripAnsi);
+    strict_1.default.ok(rendered.some((line) => line.startsWith(`  ${(0, tui_1.agentFace)('codex')} codex · `)));
+});
 (0, node_test_1.default)('raw terminal keys decode into an explicit union', () => {
     strict_1.default.deepEqual((0, tui_1.decodeKey)('\x1b[A'), { type: 'up' });
     strict_1.default.deepEqual((0, tui_1.decodeKey)('x'), { type: 'text', text: 'x' });

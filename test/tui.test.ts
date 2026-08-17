@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd } from '../src/board';
+import {
+  buildFeedLines, chatEscapeAction, headerBar, nextWizardStep, pluginContextCwd, rosterIdentity,
+} from '../src/board';
 import { nextSetupStep } from '../src/setup';
 import { manifestVersion, runUpdate } from '../src/update';
-import { clean, decodeKey, stripAnsi, visWidth, wrap } from '../src/tui';
+import {
+  AGENT_FACES, agentAvatar, agentFace, authorHue, authorWithAvatar,
+  clean, decodeKey, fg, stripAnsi, visWidth, wrap,
+} from '../src/tui';
+import type { MessageRow } from '../src/types';
 
 test('terminal sanitization removes controls but preserves newlines', () => {
   assert.equal(clean('hello\x1b[31m red\r\nnext\x07'), 'hello[31m red\nnext');
@@ -13,6 +19,45 @@ test('wrapping and visible width handle ANSI independently', () => {
   assert.deepEqual(wrap('one two three', 7), ['one two', 'three']);
   assert.equal(visWidth('\x1b[1mhello\x1b[0m'), 5);
   assert.equal(stripAnsi('\x1b[1mhello\x1b[0m'), 'hello');
+});
+
+test('agent avatars are curated, fixed-width, and deterministic', () => {
+  assert.equal(AGENT_FACES.length, 32);
+  assert.equal(new Set(AGENT_FACES).size, AGENT_FACES.length);
+  for (const face of AGENT_FACES) {
+    assert.match(face, /^[\x20-\x7e]{5}$/);
+    assert.equal(visWidth(face), 5);
+  }
+  assert.equal(agentFace('codex'), agentFace('codex'));
+  assert.ok(new Set(['codex', 'claude', 'pi', 'opencode', 'gemini', 'cursor']
+    .map(agentFace)).size >= 4);
+});
+
+test('agent avatars reuse the existing author color and remain legible without ANSI', () => {
+  const name = 'codex';
+  assert.ok(agentAvatar(name).startsWith(fg(authorHue(name))));
+  assert.equal(stripAnsi(agentAvatar(name)), agentFace(name));
+  assert.equal(stripAnsi(authorWithAvatar(name)), `${agentFace(name)} ${name}`);
+  assert.equal(visWidth(authorWithAvatar(name)), 5 + 1 + name.length);
+});
+
+test('board roster and chat headers render the assigned avatar', () => {
+  assert.equal(stripAnsi(rosterIdentity('codex', 'frontend')),
+    `${agentFace('codex')} frontend · @codex`);
+  const message: MessageRow = {
+    id: 1,
+    from_agent: 'codex',
+    to_agent: '#chat',
+    body: 'deploy is green',
+    kind: 'chat',
+    ref_id: null,
+    created_at: '2026-01-01 09:41:00',
+    delivered_at: null,
+    read_at: null,
+  };
+  const rendered = buildFeedLines([message], 80, 'marc', 0).map(stripAnsi);
+  assert.ok(rendered.some((line) =>
+    line.startsWith(`  ${agentFace('codex')} codex · `)));
 });
 
 test('raw terminal keys decode into an explicit union', () => {

@@ -35,7 +35,7 @@ const LOGO_SHADES = [240, 242, 244, 246, 248, 250, 252, 254, 231];
 export function logoLines(width: number): string[] {
   if (width < 90) return [` ${BOLD}CHATTER${RESET}`, ''];
   return [...LOGO.map((l, i) => ` ${fg(LOGO_SHADES[i] ?? 231)}${l}${RESET}`),
-    ` ${FAINT}group chat for coding agents in Herdr worktrees${RESET}`, ''];
+    ` ${FAINT}cross-harness group chat for agents sharing a Git repository in Herdr${RESET}`, ''];
 }
 
 // The one hint-row format: dim, ` · ` separated, three-space indent.
@@ -46,14 +46,37 @@ export const hint = (...parts: readonly (string | null | undefined | false)[]): 
 // An editable text field: prompt, value, block cursor. Same in every wizard.
 export const field = (v: string): string => `${BOLD} › ${RESET}${v}${INV} ${RESET}`;
 
-// Stable author colors: same name -> same hue, everywhere, forever.
+// Stable visual identity: same handle -> same hue and five-column face,
+// everywhere, forever. Faces are deliberately curated rather than assembled
+// so each one reads cleanly in ordinary terminal fonts.
 const AUTHOR_HUES = [204, 214, 114, 81, 147, 179, 210, 117];
-export function authorHue(name: string): number {
+export const AGENT_FACES = [
+  '[o_o]', '[O_O]', '[0_0]', '[._.]',
+  '[^_^]', '[u_u]', '[n_n]', '[v_v]',
+  '[o.O]', '[O.o]', '[q_p]', '[p_q]',
+  '[@_@]', '[*_*]', '[+_+]', '[~_~]',
+  '{o_o}', '{^_^}', '{._.}', '{0_0}',
+  '(o_o)', '(^_^)', '(._.)', '(O_O)',
+  '<o_o>', '<^_^>', '<._.>', '<0_0>',
+  '/o_o\\', '/^_^\\', '/._.\\', '/0_0\\',
+] as const;
+
+function nameHash(name: string): number {
   let h = 0;
   for (const ch of String(name)) h = (h * 31 + (ch.codePointAt(0) ?? 0)) >>> 0;
-  return AUTHOR_HUES[h % AUTHOR_HUES.length] ?? 204;
+  return h;
 }
+
+export function authorHue(name: string): number {
+  return AUTHOR_HUES[nameHash(name) % AUTHOR_HUES.length] ?? 204;
+}
+export function agentFace(name: string): string {
+  return AGENT_FACES[nameHash(`${name}\0avatar`) % AGENT_FACES.length] ?? '[o_o]';
+}
+export const agentAvatar = (name: string): string =>
+  `${fg(authorHue(name))}${BOLD}${agentFace(name)}${RESET}`;
 export const author = (name: string): string => `${fg(authorHue(name))}${BOLD}${name}${RESET}`;
+export const authorWithAvatar = (name: string): string => `${agentAvatar(name)} ${author(name)}`;
 
 export const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 

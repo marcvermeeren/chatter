@@ -1,8 +1,9 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.visWidth = exports.clean = exports.stripAnsi = exports.author = exports.field = exports.hint = exports.NEWMARK = exports.CYAN = exports.YELLOW = exports.GREEN = exports.FAINT = exports.CHROME = exports.bg = exports.fg = exports.INV = exports.BOLD = exports.RESET = void 0;
+exports.visWidth = exports.clean = exports.stripAnsi = exports.authorWithAvatar = exports.author = exports.agentAvatar = exports.AGENT_FACES = exports.field = exports.hint = exports.NEWMARK = exports.CYAN = exports.YELLOW = exports.GREEN = exports.FAINT = exports.CHROME = exports.bg = exports.fg = exports.INV = exports.BOLD = exports.RESET = void 0;
 exports.logoLines = logoLines;
 exports.authorHue = authorHue;
+exports.agentFace = agentFace;
 exports.wrap = wrap;
 exports.makePainter = makePainter;
 exports.decodeKey = decodeKey;
@@ -41,7 +42,7 @@ function logoLines(width) {
     if (width < 90)
         return [` ${exports.BOLD}CHATTER${exports.RESET}`, ''];
     return [...LOGO.map((l, i) => ` ${(0, exports.fg)(LOGO_SHADES[i] ?? 231)}${l}${exports.RESET}`),
-        ` ${exports.FAINT}group chat for coding agents in Herdr worktrees${exports.RESET}`, ''];
+        ` ${exports.FAINT}cross-harness group chat for agents sharing a Git repository in Herdr${exports.RESET}`, ''];
 }
 // The one hint-row format: dim, ` · ` separated, three-space indent.
 // Convention: the primary action first, then modifiers, exit/cancel last.
@@ -50,16 +51,38 @@ exports.hint = hint;
 // An editable text field: prompt, value, block cursor. Same in every wizard.
 const field = (v) => `${exports.BOLD} › ${exports.RESET}${v}${exports.INV} ${exports.RESET}`;
 exports.field = field;
-// Stable author colors: same name -> same hue, everywhere, forever.
+// Stable visual identity: same handle -> same hue and five-column face,
+// everywhere, forever. Faces are deliberately curated rather than assembled
+// so each one reads cleanly in ordinary terminal fonts.
 const AUTHOR_HUES = [204, 214, 114, 81, 147, 179, 210, 117];
-function authorHue(name) {
+exports.AGENT_FACES = [
+    '[o_o]', '[O_O]', '[0_0]', '[._.]',
+    '[^_^]', '[u_u]', '[n_n]', '[v_v]',
+    '[o.O]', '[O.o]', '[q_p]', '[p_q]',
+    '[@_@]', '[*_*]', '[+_+]', '[~_~]',
+    '{o_o}', '{^_^}', '{._.}', '{0_0}',
+    '(o_o)', '(^_^)', '(._.)', '(O_O)',
+    '<o_o>', '<^_^>', '<._.>', '<0_0>',
+    '/o_o\\', '/^_^\\', '/._.\\', '/0_0\\',
+];
+function nameHash(name) {
     let h = 0;
     for (const ch of String(name))
         h = (h * 31 + (ch.codePointAt(0) ?? 0)) >>> 0;
-    return AUTHOR_HUES[h % AUTHOR_HUES.length] ?? 204;
+    return h;
 }
+function authorHue(name) {
+    return AUTHOR_HUES[nameHash(name) % AUTHOR_HUES.length] ?? 204;
+}
+function agentFace(name) {
+    return exports.AGENT_FACES[nameHash(`${name}\0avatar`) % exports.AGENT_FACES.length] ?? '[o_o]';
+}
+const agentAvatar = (name) => `${(0, exports.fg)(authorHue(name))}${exports.BOLD}${agentFace(name)}${exports.RESET}`;
+exports.agentAvatar = agentAvatar;
 const author = (name) => `${(0, exports.fg)(authorHue(name))}${exports.BOLD}${name}${exports.RESET}`;
 exports.author = author;
+const authorWithAvatar = (name) => `${(0, exports.agentAvatar)(name)} ${(0, exports.author)(name)}`;
+exports.authorWithAvatar = authorWithAvatar;
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 exports.stripAnsi = stripAnsi;
 // Stored text is untrusted terminal-wise: strip control chars (ANSI/OSC
