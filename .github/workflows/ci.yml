@@ -14,10 +14,10 @@ jobs:
         include:
           - os: ubuntu-latest
             node: 22.5.1
-            deadcode: true
+            deadcode: false
           - os: ubuntu-latest
             node: 24.x
-            deadcode: false
+            deadcode: true
           - os: ubuntu-latest
             node: 26.x
             deadcode: false
