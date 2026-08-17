@@ -81,6 +81,7 @@ function runImplementation(label, entry) {
     HERDR_BIN_PATH: fakeHerdr,
     FAKE_CALLS: callsFile,
     FAKE_ROSTER: rosterFile,
+    FAKE_REDACT_PROMPTS: '1',
   };
   const observations = [];
   const invoke = (args, json = args.includes('--json') || (args[0] === 'handoff' && args[1] === 'show')) => {
@@ -190,4 +191,4 @@ function verifyLegacyDatabaseUpgrade() {
 }
 verifyLegacyDatabaseUpgrade();
 
-console.log(`legacy and compiled behavior match: ${current.observations.length} commands, exact JSON/human output, exit codes, Herdr calls, SQLite contents, and shared legacy DB upgrade`);
+console.log(`legacy and compiled behavior match: ${current.observations.length} commands, exact JSON/human output, exit codes, Herdr targets, SQLite contents, and shared legacy DB upgrade`);

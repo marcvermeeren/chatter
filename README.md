@@ -73,11 +73,10 @@ quieter). Agents' surfaces stay clean: their inbox is their own mail, their
 `chatter chat` is channel-only. Nothing is cryptographically secret — it's
 one SQLite file on your machine — but default surfaces shape behavior.
 
-**5. The protocol is self-teaching.** Every message injected into an agent's
-session ends with a footer showing how to reply, check the inbox, and find
-unread chat. In testing, fresh Claude Code, Codex, and pi instances each
-learned the protocol from a single received message — and the footer even
-decides etiquette (channel mentions teach channel replies).
+**5. Coordination prompts stay small.** Injected messages carry only the next
+useful action: private replies stay private, channel replies stay public, and
+questions, assignments, and handoffs point directly at their completion
+command. First contact alone points at `chatter help`.
 
 ---
 
@@ -247,7 +246,9 @@ fields to maintain — purpose lives in names the human already gave.
   open and visible (roster footer, board, `chatter questions`) until someone
   answers; the asker is notified. Closes the "documented the open question,
   never went back to it" gap.
-- `chatter notes [query]` — read/search; `chatter resolve <id>` marks stale.
+- `chatter notes [query] [--task TASK-n]` — read/search, with task memory
+  ranked dead ends, decisions, then discoveries; `chatter resolve <id>` marks
+  stale.
 
 ### Tasks & handoffs
 - `chatter task create|list|assign|done` — lightweight ownership and status.
@@ -317,7 +318,7 @@ chatter chat [--limit N] [--all]      read the channel (marks it read)
 chatter brief [today|2h|30m]          what changed since you last checked
 chatter inbox [--all]                 your mail
 chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
-chatter notes [query] [--all]         shared scratchpad
+chatter notes [query] [--task TASK-n] [--all]   shared memory
 chatter resolve <note-id>             mark a note stale
 chatter ask [agent] <question>        open a question
 chatter answer <id> <text>            answer one (notifies the asker)
@@ -441,11 +442,9 @@ duplicating work? Over-communicate? Does shared memory reduce repeated
 investigation? `chatter stats` measures exactly these. Prune primitives that
 go unused.
 
-Early findings from live testing: agents learn the protocol from one received
-message; the delivery footer literally decides etiquette (teaching
-`chatter send` produced DM replies to channel mentions — teaching
-`chatter post` fixed it); and agents will spontaneously relay questions
-between each other when given the primitives.
+Early findings from live testing: agents follow delivery footers literally,
+so Chatter now gives only the contextual next action; and agents will
+spontaneously relay questions between each other when given the primitives.
 
 ## Code layout
 

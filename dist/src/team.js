@@ -9,6 +9,7 @@ exports.whoami = whoami;
 exports.nameTaken = nameTaken;
 exports.resolveRecipient = resolveRecipient;
 exports.chatUnreadCount = chatUnreadCount;
+exports.formatDelivery = formatDelivery;
 exports.flushPending = flushPending;
 exports.sendMessage = sendMessage;
 exports.postToChat = postToChat;
@@ -195,19 +196,85 @@ function chatUnreadCount(agent, d = (0, db_1.db)()) {
     return d.prepare("SELECT COUNT(*) AS n FROM messages WHERE to_agent = '#chat' AND from_agent != ? AND id > ?")
         .get(agent, (p && p.last_read_id) || 0)?.n ?? 0;
 }
+function generatedScaffoldFreeBody(msg) {
+    let body = msg.body;
+    const question = msg.kind === 'system' ? msg.ref_id?.match(/^q(\d+)$/) : null;
+    if (question?.[1]) {
+        const suffix = ` (answer with: chatter answer ${question[1]} "...")`;
+        if (body.endsWith(suffix))
+            body = body.slice(0, -suffix.length);
+    }
+    if (msg.kind === 'system' && /^TASK-\d+$/.test(msg.ref_id || '')) {
+        const suffix = ' (details: chatter task list)';
+        if (body.endsWith(suffix))
+            body = body.slice(0, -suffix.length);
+    }
+    const handoff = msg.kind === 'handoff' ? msg.ref_id?.match(/^h(\d+)$/) : null;
+    if (handoff?.[1]) {
+        const suffix = ` | full details: chatter handoff show ${handoff[1]}`;
+        if (body.endsWith(suffix))
+            body = body.slice(0, -suffix.length);
+    }
+    return body;
+}
+function contextualFooter(msg, visibleBody, d) {
+    const clauses = [];
+    const add = (command, clause) => {
+        if (!visibleBody.includes(command))
+            clauses.push(clause);
+    };
+    const question = msg.kind === 'system' ? msg.ref_id?.match(/^q(\d+)$/) : null;
+    const taskId = msg.kind === 'system' && /^TASK-\d+$/.test(msg.ref_id || '') ? msg.ref_id : null;
+    const handoff = msg.kind === 'handoff' ? msg.ref_id?.match(/^h(\d+)$/) : null;
+    if (msg.kind === 'chat') {
+        add(`chatter send ${msg.from_agent}`, `reply: chatter send ${msg.from_agent} "..."`);
+    }
+    else if (msg.kind === 'mention') {
+        add('chatter post', `reply: chatter post "@${msg.from_agent} ..."`);
+    }
+    else if (question?.[1]) {
+        const active = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE id = ? AND type = 'question' AND status = 'active'").get(Number(question[1]))?.n ?? 0;
+        if (active)
+            add(`chatter answer ${question[1]}`, `answer: chatter answer ${question[1]} "..."`);
+    }
+    else if (taskId) {
+        add(`chatter task done ${taskId}`, `done: chatter task done ${taskId}`);
+        const memory = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE task_id = ? AND status = 'active'").get(taskId)?.n ?? 0;
+        if (memory)
+            add(`chatter notes --task ${taskId}`, `memory: chatter notes --task ${taskId}`);
+    }
+    else if (handoff?.[1]) {
+        add(`chatter handoff show ${handoff[1]}`, `next: chatter handoff show ${handoff[1]}`);
+        const row = d.prepare('SELECT task_id FROM handoffs WHERE id = ?')
+            .get(Number(handoff[1]));
+        if (row?.task_id) {
+            const memory = d.prepare(`SELECT COUNT(*) AS n FROM notes
+        WHERE task_id = ? AND status = 'active' AND type IN ('decision','dead-end')`).get(row.task_id)?.n ?? 0;
+            if (memory)
+                add(`chatter notes --task ${row.task_id}`, `prior decisions/dead ends: chatter notes --task ${row.task_id}`);
+        }
+    }
+    else if (msg.kind === 'purpose') {
+        add('chatter notes', 'search first: chatter notes "<approach>"');
+        add('chatter note ', 'record dead ends: chatter note "..." --type dead-end');
+    }
+    const prior = d.prepare(`SELECT COUNT(*) AS n FROM messages
+    WHERE to_agent = ? AND id != ? AND delivered_at IS NOT NULL`).get(msg.to_agent, msg.id)?.n ?? 0;
+    if (!prior)
+        add('chatter help', 'new here: chatter help');
+    return clauses;
+}
 function formatDelivery(msg, d = (0, db_1.db)()) {
     const head = msg.kind === 'handoff' ? `[chatter] handoff from ${msg.from_agent}`
         : msg.kind === 'mention' ? `[chatter] #chat mention from ${msg.from_agent}`
             : `[chatter] message from ${msg.from_agent}`;
-    const unread = chatUnreadCount(msg.to_agent, d);
-    const chat = unread ? ` | #chat: ${unread} unread (chatter chat)` : '';
-    // Channel mentions teach channel replies — agents follow the footer
-    // literally, so it decides etiquette (learned the hard way).
-    const reply = msg.kind === 'mention'
-        ? `reply in #chat: chatter post "@${msg.from_agent} ..."`
-        : `reply: chatter send ${msg.from_agent} "..."`;
-    return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — ${reply} | inbox: chatter inbox${chat} | all commands: chatter help)`;
+    const body = deliveryText(generatedScaffoldFreeBody(msg));
+    const clauses = contextualFooter(msg, body, d);
+    return `${head}: ${body}${clauses.length ? `\n(${clauses.join(' · ')})` : ''}`;
 }
+// Deliver one message: agents get a session injection; the human gets a toast
+// (the message itself waits in the feed/inbox). Claims the row atomically
+// first so concurrent flushes (event hooks) can't double-deliver.
 function tryDeliver(msg, live, d = (0, db_1.db)()) {
     if (msg.to_agent === (0, db_1.humanName)()) {
         const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
@@ -250,7 +317,7 @@ function flushPending(d = (0, db_1.db)()) {
 }
 function sendMessage(from, to, body, kind = 'chat', refId = null, d = (0, db_1.db)()) {
     const r = d.prepare('INSERT INTO messages (from_agent, to_agent, body, kind, ref_id, created_at) VALUES (?,?,?,?,?,?)').run(from, to, body, kind, refId, (0, db_1.now)());
-    const msg = { id: Number(r.lastInsertRowid), from_agent: from, to_agent: to, body, kind };
+    const msg = { id: Number(r.lastInsertRowid), from_agent: from, to_agent: to, body, kind, ref_id: refId };
     const live = (0, herdr_1.sessionAgents)();
     if (to === (0, db_1.humanName)()) {
         return tryDeliver(msg, live, d) ? { delivered: true } : { delivered: false, reason: 'toast failed — waiting in the feed' };

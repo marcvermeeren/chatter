@@ -364,7 +364,7 @@ function kickoff(d: ChatterDb, ui: UiState): void {
   if (!made.length) { w.report.push({ ok: false, text: 'nothing was created — nothing to kick off' }); return; }
   for (const p of made) {
     if (!p.purpose) continue;
-    const res = sendMessage(me.name, p.handle, `you are "${p.handle}". your purpose: ${p.purpose}`, 'system', null, d);
+    const res = sendMessage(me.name, p.handle, `you are "${p.handle}". your purpose: ${p.purpose}`, 'purpose', null, d);
     w.report.push({ ok: true, text: res.delivered ? `@${p.handle} briefed` : `@${p.handle} brief queued (${res.reason})` });
   }
   // Display label if a plan ever carries one; today the wizard collects only

@@ -1,7 +1,11 @@
 #!/bin/sh
 # Fake herdr for behavioral tests: serves a canned roster ($FAKE_ROSTER file)
 # and records every invocation ($FAKE_CALLS file).
-echo "$*" >> "${FAKE_CALLS:?}"
+if [ "${FAKE_REDACT_PROMPTS:-}" = "1" ] && [ "$1 $2" = "agent prompt" ]; then
+  printf 'agent prompt %s <delivery>\n' "$3" >> "${FAKE_CALLS:?}"
+else
+  echo "$*" >> "${FAKE_CALLS:?}"
+fi
 case "$1 $2" in
   "agent list")         cat "${FAKE_ROSTER:?}" ;;
   "worktree create")    printf '{"result":{"worktree":{"path":"/fake/worktree"},"workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}\n' ;;

@@ -8,7 +8,8 @@ import { herdr, sessionAgents, invalidateSessionAgents, paneLabel } from './herd
 import { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } from './db';
 import { die } from './util';
 import type {
-  AgentStatus, ChatterDb, CountRow, Identity, LastReadRow, LiveAgent, MessageRow, NameRow, PaneRow,
+  AgentStatus, ChatterDb, CountRow, HandoffRow, Identity, LastReadRow, LiveAgent,
+  MessageRow, NameRow, PaneRow,
 } from './types';
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -192,25 +193,85 @@ export function chatUnreadCount(agent: string, d: ChatterDb = db()): number {
     .get(agent, (p && p.last_read_id) || 0)?.n ?? 0;
 }
 
-function formatDelivery(msg: Pick<MessageRow, 'from_agent' | 'to_agent' | 'body' | 'kind'>, d: ChatterDb = db()): string {
+type DeliveryMessage = Pick<MessageRow, 'id' | 'from_agent' | 'to_agent' | 'body' | 'kind' | 'ref_id'>;
+
+function generatedScaffoldFreeBody(msg: DeliveryMessage): string {
+  let body = msg.body;
+  const question = msg.kind === 'system' ? msg.ref_id?.match(/^q(\d+)$/) : null;
+  if (question?.[1]) {
+    const suffix = ` (answer with: chatter answer ${question[1]} "...")`;
+    if (body.endsWith(suffix)) body = body.slice(0, -suffix.length);
+  }
+  if (msg.kind === 'system' && /^TASK-\d+$/.test(msg.ref_id || '')) {
+    const suffix = ' (details: chatter task list)';
+    if (body.endsWith(suffix)) body = body.slice(0, -suffix.length);
+  }
+  const handoff = msg.kind === 'handoff' ? msg.ref_id?.match(/^h(\d+)$/) : null;
+  if (handoff?.[1]) {
+    const suffix = ` | full details: chatter handoff show ${handoff[1]}`;
+    if (body.endsWith(suffix)) body = body.slice(0, -suffix.length);
+  }
+  return body;
+}
+
+function contextualFooter(msg: DeliveryMessage, visibleBody: string, d: ChatterDb): string[] {
+  const clauses: string[] = [];
+  const add = (command: string, clause: string): void => {
+    if (!visibleBody.includes(command)) clauses.push(clause);
+  };
+  const question = msg.kind === 'system' ? msg.ref_id?.match(/^q(\d+)$/) : null;
+  const taskId = msg.kind === 'system' && /^TASK-\d+$/.test(msg.ref_id || '') ? msg.ref_id : null;
+  const handoff = msg.kind === 'handoff' ? msg.ref_id?.match(/^h(\d+)$/) : null;
+
+  if (msg.kind === 'chat') {
+    add(`chatter send ${msg.from_agent}`, `reply: chatter send ${msg.from_agent} "..."`);
+  } else if (msg.kind === 'mention') {
+    add('chatter post', `reply: chatter post "@${msg.from_agent} ..."`);
+  } else if (question?.[1]) {
+    const active = d.prepare<CountRow>(
+      "SELECT COUNT(*) AS n FROM notes WHERE id = ? AND type = 'question' AND status = 'active'"
+    ).get(Number(question[1]))?.n ?? 0;
+    if (active) add(`chatter answer ${question[1]}`, `answer: chatter answer ${question[1]} "..."`);
+  } else if (taskId) {
+    add(`chatter task done ${taskId}`, `done: chatter task done ${taskId}`);
+    const memory = d.prepare<CountRow>(
+      "SELECT COUNT(*) AS n FROM notes WHERE task_id = ? AND status = 'active'"
+    ).get(taskId)?.n ?? 0;
+    if (memory) add(`chatter notes --task ${taskId}`, `memory: chatter notes --task ${taskId}`);
+  } else if (handoff?.[1]) {
+    add(`chatter handoff show ${handoff[1]}`, `next: chatter handoff show ${handoff[1]}`);
+    const row = d.prepare<Pick<HandoffRow, 'task_id'>>('SELECT task_id FROM handoffs WHERE id = ?')
+      .get(Number(handoff[1]));
+    if (row?.task_id) {
+      const memory = d.prepare<CountRow>(`SELECT COUNT(*) AS n FROM notes
+        WHERE task_id = ? AND status = 'active' AND type IN ('decision','dead-end')`).get(row.task_id)?.n ?? 0;
+      if (memory) add(`chatter notes --task ${row.task_id}`,
+        `prior decisions/dead ends: chatter notes --task ${row.task_id}`);
+    }
+  } else if (msg.kind === 'purpose') {
+    add('chatter notes', 'search first: chatter notes "<approach>"');
+    add('chatter note ', 'record dead ends: chatter note "..." --type dead-end');
+  }
+
+  const prior = d.prepare<CountRow>(`SELECT COUNT(*) AS n FROM messages
+    WHERE to_agent = ? AND id != ? AND delivered_at IS NOT NULL`).get(msg.to_agent, msg.id)?.n ?? 0;
+  if (!prior) add('chatter help', 'new here: chatter help');
+  return clauses;
+}
+
+export function formatDelivery(msg: DeliveryMessage, d: ChatterDb = db()): string {
   const head = msg.kind === 'handoff' ? `[chatter] handoff from ${msg.from_agent}`
     : msg.kind === 'mention' ? `[chatter] #chat mention from ${msg.from_agent}`
     : `[chatter] message from ${msg.from_agent}`;
-  const unread = chatUnreadCount(msg.to_agent, d);
-  const chat = unread ? ` | #chat: ${unread} unread (chatter chat)` : '';
-  // Channel mentions teach channel replies — agents follow the footer
-  // literally, so it decides etiquette (learned the hard way).
-  const reply = msg.kind === 'mention'
-    ? `reply in #chat: chatter post "@${msg.from_agent} ..."`
-    : `reply: chatter send ${msg.from_agent} "..."`;
-  return `${head}: ${deliveryText(msg.body)}\n(you are "${msg.to_agent}" — ${reply} | inbox: chatter inbox${chat} | all commands: chatter help)`;
+  const body = deliveryText(generatedScaffoldFreeBody(msg));
+  const clauses = contextualFooter(msg, body, d);
+  return `${head}: ${body}${clauses.length ? `\n(${clauses.join(' · ')})` : ''}`;
 }
 
 // Deliver one message: agents get a session injection; the human gets a toast
 // (the message itself waits in the feed/inbox). Claims the row atomically
 // first so concurrent flushes (event hooks) can't double-deliver.
-type DeliverableMessage = Pick<MessageRow, 'id' | 'from_agent' | 'to_agent' | 'body' | 'kind'>;
-function tryDeliver(msg: DeliverableMessage, live: readonly LiveAgent[], d: ChatterDb = db()): boolean {
+function tryDeliver(msg: DeliveryMessage, live: readonly LiveAgent[], d: ChatterDb = db()): boolean {
   if (msg.to_agent === humanName()) {
     const claim = d.prepare('UPDATE messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL')
       .run(now(), msg.id);
@@ -258,7 +319,7 @@ export function sendMessage(
   const r = d.prepare(
     'INSERT INTO messages (from_agent, to_agent, body, kind, ref_id, created_at) VALUES (?,?,?,?,?,?)'
   ).run(from, to, body, kind, refId, now());
-  const msg = { id: Number(r.lastInsertRowid), from_agent: from, to_agent: to, body, kind };
+  const msg = { id: Number(r.lastInsertRowid), from_agent: from, to_agent: to, body, kind, ref_id: refId };
   const live = sessionAgents();
   if (to === humanName()) {
     return tryDeliver(msg, live, d) ? { delivered: true } : { delivered: false, reason: 'toast failed — waiting in the feed' };

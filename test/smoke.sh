@@ -166,6 +166,19 @@ cat > "$BLOCKED_ROSTER" <<EOF
   {"name":"alpha","pane_id":"w1:p1","agent_status":"blocked","agent":"claude","workspace_id":"w1","cwd":"$REPO"}
 ]}}
 EOF
+# The same stored DM must render identically whether delivered immediately or
+# after waiting in the queue. Alpha already received "hi", so help is absent.
+: > "$FAKE_CALLS"
+$CHF send alpha "parity footer" >/dev/null 2>&1
+IMMEDIATE_FOOTER=$(grep -A1 '^agent prompt w1:p1 ' "$FAKE_CALLS" | tail -n 2)
+: > "$FAKE_CALLS"
+FAKE_ROSTER="$BLOCKED_ROSTER" $CHF send alpha "parity footer" >/dev/null 2>&1
+$CHF _flush >/dev/null 2>&1
+QUEUED_FOOTER=$(grep -A1 '^agent prompt w1:p1 ' "$FAKE_CALLS" | tail -n 2)
+[ "$IMMEDIATE_FOOTER" = "$QUEUED_FOOTER" ] \
+  && echo "$IMMEDIATE_FOOTER" | grep -Fqx '(reply: chatter send tester "...")' \
+  && ok "immediate and queued delivery use the same contextual footer" \
+  || fail "immediate/queued footer mismatch"
 : > "$FAKE_CALLS"
 FAKE_ROSTER="$BLOCKED_ROSTER" $CHF send alpha "wait for approval" 2>/dev/null | grep -q queued \
   && ok "blocked target queues delivery" || fail "blocked target queues delivery"
@@ -206,6 +219,33 @@ LIMIT_LOG_COUNT=$($CHF log --limit 1 --json | node -e "const r=JSON.parse(requir
 ALL_LOG_COUNT=$($CHF log --all --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
 [ "$LIMIT_LOG_COUNT" = "1" ] && [ "$ALL_LOG_COUNT" -gt "$LIMIT_LOG_COUNT" ] \
   && ok "log --limit and --all control history size" || fail "log --limit/--all history contract"
+
+echo "# task-scoped notes"
+MEM_ID=$($CHF task create "memory ordering" | awk '{print $1}')
+$CHF note "dead path" --type dead-end --task "$MEM_ID" >/dev/null
+$CHF note "chosen path" --type decision --task "$MEM_ID" >/dev/null
+$CHF note "needle discovery" --type discovery --task "$MEM_ID" >/dev/null
+for i in 1 2 3 4 5 6 7 8 9; do
+  $CHF note "ordinary context $i" --task "$MEM_ID" >/dev/null
+done
+STALE_ID=$($CHF note "stale dead end" --type dead-end --task "$MEM_ID" | sed -n 's/note #\([0-9][0-9]*\) saved/\1/p')
+$CHF resolve "$STALE_ID" >/dev/null
+TASK_NOTES=$($CHF notes --task "$MEM_ID" --json)
+echo "$TASK_NOTES" | MEM_ID="$MEM_ID" node -e '
+const rows=JSON.parse(require("fs").readFileSync(0));
+const rank={"dead-end":0,decision:1,discovery:2};
+if(rows.length!==10||rows.some(r=>r.task_id!==process.env.MEM_ID||r.status!=="active"))process.exit(1);
+for(let i=1;i<rows.length;i++)if((rank[rows[i-1].type]??3)>(rank[rows[i].type]??3))process.exit(1);
+' && ok "notes --task caps and prioritizes active task memory" || fail "notes --task ordering/cap"
+$CHF notes needle --task "$MEM_ID" --json | node -e '
+const rows=JSON.parse(require("fs").readFileSync(0));
+if(rows.length!==1||rows[0].text!=="needle discovery")process.exit(1);
+' && ok "notes --task composes with text search" || fail "notes --task query composition"
+$CHF notes --task "$MEM_ID" --all --json | node -e '
+const rows=JSON.parse(require("fs").readFileSync(0));
+if(!rows.some(r=>r.text==="stale dead end"&&r.status==="superseded"))process.exit(1);
+' && ok "notes --task --all includes inactive memory" || fail "notes --task --all inactive memory"
+
 echo "# spawn v2: worktree default, --tab explicit"
 : > "$FAKE_CALLS"
 OUT=$($CHF spawn helper2 --kind pi 2>&1)

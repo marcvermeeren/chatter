@@ -227,18 +227,29 @@ function cmdNote(me, args) {
     console.log(`note #${r.lastInsertRowid} saved`);
 }
 function cmdNotes(_me, args) {
-    const opts = (0, util_1.parseFlags)(args, { all: false });
+    const opts = (0, util_1.parseFlags)(args, { all: false, task: null });
     const q = opts._.join(' ').trim();
-    const where = opts.all ? '1=1' : "status = 'active'";
-    const rows = q
-        ? (0, db_1.db)().prepare(`SELECT * FROM notes WHERE ${where} AND text LIKE ? ORDER BY id DESC LIMIT 100`).all(`%${q}%`)
-        : (0, db_1.db)().prepare(`SELECT * FROM notes WHERE ${where} ORDER BY id DESC LIMIT 100`).all();
+    const conditions = opts.all ? ['1=1'] : ["status = 'active'"];
+    const params = [];
+    if (opts.task) {
+        conditions.push('task_id = ?');
+        params.push(opts.task);
+    }
+    if (q) {
+        conditions.push('text LIKE ?');
+        params.push(`%${q}%`);
+    }
+    const order = opts.task
+        ? "CASE type WHEN 'dead-end' THEN 0 WHEN 'decision' THEN 1 WHEN 'discovery' THEN 2 ELSE 3 END, id DESC"
+        : 'id DESC';
+    const rows = (0, db_1.db)().prepare(`SELECT * FROM notes WHERE ${conditions.join(' AND ')} ORDER BY ${order} LIMIT ${opts.task ? 10 : 100}`).all(...params);
     (0, util_1.emit)(rows, () => {
         if (!rows.length) {
-            console.log(q ? `no notes matching "${q}"` : 'no notes yet');
+            const scope = opts.task ? ` for ${opts.task}` : '';
+            console.log(q ? `no notes${scope} matching "${q}"` : opts.task ? `no notes for ${opts.task}` : 'no notes yet');
             return;
         }
-        for (const n of [...rows].reverse()) {
+        for (const n of opts.task ? rows : [...rows].reverse()) {
             const refs = [n.task_id, n.commit_sha && n.commit_sha.slice(0, 8)].filter(Boolean).join(' ');
             const st = n.status === 'active' ? '' : ` (${n.status}${n.superseded_by ? ` by #${n.superseded_by}` : ''})`;
             console.log(`#${n.id} [${n.type}] ${n.author}: ${(0, tui_1.clean)(n.text)}${refs ? `  (${refs})` : ''}${st}`);
@@ -842,7 +853,7 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     lines.unshift(`@${name} is up (${kind}) — ${whereLine}`);
     lines.push(verified ? 'verified: joined this repo\'s universe' : 'warning: could not verify repo membership yet — its mail queues until it checks in');
     if (purpose) {
-        const res = (0, team_1.sendMessage)(me.name, name, `you are "${name}". your purpose: ${purpose}`, 'system', null, d);
+        const res = (0, team_1.sendMessage)(me.name, name, `you are "${name}". your purpose: ${purpose}`, 'purpose', null, d);
         lines.push(res.delivered ? 'purpose delivered to its session' : `purpose queued (${res.reason})`);
         onProgress(res.delivered ? 'purpose delivered' : 'purpose queued');
     }
@@ -917,7 +928,7 @@ function help() {
   chatter chat [--limit N] [--all]      read the group chat (marks it read)
   chatter brief [today|2h|30m]          what changed since you last checked
   chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
-  chatter notes [query] [--all]         read/search the shared scratchpad
+  chatter notes [query] [--task TASK-n] [--all]   read/search shared memory
   chatter resolve <note-id>             mark a note stale/superseded
   chatter ask [agent] <question...>     open a question (optionally aimed at an agent)
   chatter answer <id> <text...>         answer a question (notifies the asker)

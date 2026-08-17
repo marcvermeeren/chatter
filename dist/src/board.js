@@ -376,7 +376,7 @@ function kickoff(d, ui) {
     for (const p of made) {
         if (!p.purpose)
             continue;
-        const res = (0, team_1.sendMessage)(me.name, p.handle, `you are "${p.handle}". your purpose: ${p.purpose}`, 'system', null, d);
+        const res = (0, team_1.sendMessage)(me.name, p.handle, `you are "${p.handle}". your purpose: ${p.purpose}`, 'purpose', null, d);
         w.report.push({ ok: true, text: res.delivered ? `@${p.handle} briefed` : `@${p.handle} brief queued (${res.reason})` });
     }
     // Display label if a plan ever carries one; today the wizard collects only
