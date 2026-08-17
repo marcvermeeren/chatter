@@ -649,6 +649,13 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     whereLine = `same checkout, new tab (${pane}) — shared files, coordinate carefully`;
     onProgress(`tab created in this checkout (${pane})`);
   } else {
+    // A worktree branch needs a commit to point at — a freshly-init'ed repo
+    // (unborn HEAD) can't host worktree teammates yet. Say so clearly.
+    const head = require('node:child_process').spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', 'HEAD'], { encoding: 'utf8' });
+    if (head.status !== 0) {
+      return fail('this repo has no commits yet, so a worktree branch has nothing to start from —\n'
+        + 'make a first commit (git commit --allow-empty -m "init") or spawn into this checkout with --tab');
+    }
     const wtBranch = branch || `agents/${name}`;
     const wtArgs = ['worktree', 'create', '--cwd', repoRoot, '--branch', wtBranch, '--label', name, '--no-focus'];
     if (base) wtArgs.push('--base', base);

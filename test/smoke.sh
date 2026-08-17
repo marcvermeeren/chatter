@@ -22,6 +22,7 @@ check() { # check <desc> <cmd...>
 
 REPO="$TMP/repo-a"
 mkdir -p "$REPO" && git -C "$REPO" init -q
+git -C "$REPO" -c user.email=t@t -c user.name=t commit --allow-empty -q -m init
 cd "$REPO"
 
 echo "# basics"
@@ -142,6 +143,13 @@ grep -q "worktree create --cwd" "$FAKE_CALLS" && grep -q "branch agents/helper2"
 grep -q "tab create" "$FAKE_CALLS" && fail "worktree spawn also made a tab" || ok "no tab for worktree spawn"
 grep -q "agent start helper2" "$FAKE_CALLS" && ok "agent started in worktree pane" || fail "agent started in worktree pane"
 echo "$OUT" | grep -q "new worktree" && ok "output names the worktree setup" || fail "output names the worktree setup"
+# Commitless repo: worktree spawn must refuse with guidance, not a raw git error.
+REPO_EMPTY="$TMP/repo-empty"; mkdir -p "$REPO_EMPTY" && git -C "$REPO_EMPTY" init -q
+( cd "$REPO_EMPTY" && $CHF spawn babyagent --kind pi 2>&1 | grep -q "no commits yet" ) \
+  && ok "commitless repo gets a clear spawn refusal" || fail "commitless repo spawn message"
+( cd "$REPO_EMPTY" && : > "$FAKE_CALLS"; $CHF spawn babyagent --kind pi >/dev/null 2>&1; \
+  grep -q "worktree create" "$FAKE_CALLS" ) && fail "worktree create attempted on unborn HEAD" || ok "no worktree attempted on unborn HEAD"
+
 # Shell-not-ready race: two busy refusals, then success — spawn must retry.
 echo 2 > "$TMP/busy-count"
 : > "$FAKE_CALLS"

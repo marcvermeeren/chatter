@@ -28,7 +28,7 @@ sessions, a shared scratchpad with dead-ends and open questions, lightweight
 tasks, and structured handoffs. The human is a first-class team member — with
 their own name, an omniscient chat window, and non-intrusive notifications.
 
-Zero dependencies (Node ≥ 22, built-in SQLite). One CLI. No skill files, no
+Zero dependencies (Node ≥ 22.5, built-in SQLite). One CLI. No skill files, no
 MCP servers, no per-agent setup — agents learn the protocol from the first
 message they receive.
 
@@ -143,7 +143,7 @@ overwritten.
 chatter doctor
 ```
 
-Read-only checklist: Node ≥ 22, Herdr reachable, plugin registered, CLI on
+Read-only checklist: Node ≥ 22.5, Herdr reachable, plugin registered, CLI on
 PATH, state dir writable, name set, toasts and keybinding configured — each
 failure with the exact fix. Exit code 1 when something's wrong.
 
