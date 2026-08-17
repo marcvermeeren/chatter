@@ -2,6 +2,7 @@
   "name": "@herdr/chatter",
   "version": "0.19.0",
   "private": true,
+  "license": "MIT",
   "description": "Team coordination and shared memory for Herdr coding agents",
   "type": "commonjs",
   "engines": {
