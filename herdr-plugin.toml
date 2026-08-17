@@ -27,6 +27,12 @@ contexts = ["global", "workspace", "pane"]
 command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_open_board"]
 
 [[actions]]
+id = "open-board-tab"
+title = "Open Chatter board in a tab"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "--no-warnings", "--experimental-sqlite", "dist/bin/chatter.js", "_open_board_tab"]
+
+[[actions]]
 id = "open-chat"
 title = "Open group chat"
 contexts = ["global", "workspace", "pane"]

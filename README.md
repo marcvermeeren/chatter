@@ -120,9 +120,10 @@ herdr plugin action invoke chatter.setup
 ```
 
 The wizard prefills your name from your OS user, enables toasts and binds
-**three** keys by appending to `~/.config/herdr/config.toml` —
+**four** keys by appending to `~/.config/herdr/config.toml` —
 `prefix+alt+c` opens the chat as a popup, `prefix+alt+t` opens it as a
-persistent tab, and `prefix+alt+b` opens the board as a popup — with a timestamped backup, respecting any existing
+persistent tab, `prefix+alt+b` opens the board as a popup, and
+`prefix+alt+shift+b` opens the board in a persistent tab — with a timestamped backup, respecting any existing
 `[ui.toast]` section and detecting keybinding conflicts per binding (each key
 is decided on its own: already bound, key taken, or added), then reloads
 Herdr's config so everything is active immediately, symlinks `chatter` into
@@ -133,10 +134,11 @@ Scripting a second machine? Non-interactive:
 ```sh
 chatter setup --yes [--name marc] [--key "prefix+alt+c"] [--tab-key "prefix+alt+t"] \
   [--board-key "prefix+alt+b"] \
+  [--board-tab-key "prefix+alt+shift+b"] \
   [--no-toasts] [--no-keybind]
 ```
 
-`--no-keybind` skips all three keys; each key can be pointed somewhere else, and
+`--no-keybind` skips all four keys; each key can be pointed somewhere else, and
 a key already used by something else is skipped with a note rather than
 overwritten.
 
@@ -283,6 +285,7 @@ fields to maintain — purpose lives in names the human already gave.
 
 ```sh
 herdr plugin action invoke chatter.open-board                         # popup
+herdr plugin action invoke chatter.open-board-tab                     # persistent tab
 herdr plugin pane open --plugin chatter --entrypoint board --placement tab
 herdr plugin pane open --plugin chatter --entrypoint chat --placement split
 ```

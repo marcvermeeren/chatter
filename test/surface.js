@@ -19,15 +19,15 @@ const expectedCommands = [
   'spawn', 'role', 'forget',
 ];
 const expectedHooks = [
-  '_startup', '_flush', '_reap', '_open_board', '_open_chat',
+  '_startup', '_flush', '_reap', '_open_board', '_open_board_tab', '_open_chat',
   '_open_chat_tab', '_setup_action', '_setup_wizard', 'board',
   '_chat_view', 'doctor',
 ];
 const expectedManifestEntrypoints = [
-  '_startup', '_flush', '_reap', '_reap', '_open_board', '_open_chat',
+  '_startup', '_flush', '_reap', '_reap', '_open_board', '_open_board_tab', '_open_chat',
   '_open_chat_tab', '_setup_action', '_setup_wizard', 'board', '_chat_view',
 ];
-const expectedActions = ['open-board', 'open-chat', 'open-chat-tab', 'setup'];
+const expectedActions = ['open-board', 'open-board-tab', 'open-chat', 'open-chat-tab', 'setup'];
 const expectedEvents = ['pane.agent_status_changed', 'pane.closed', 'worktree.removed'];
 const expectedPanes = ['setup', 'board', 'chat'];
 

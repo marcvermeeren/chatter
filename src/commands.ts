@@ -839,8 +839,8 @@ export function help(): string {
 Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
 them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
 pane open --plugin chatter --entrypoint chat --placement split
-Open the board: prefix+alt+b (popup) — same as: herdr plugin action invoke
-chatter.open-board
+Open the board: prefix+alt+b (popup) or prefix+alt+shift+b (tab) once setup binds
+them — same as: herdr plugin action invoke chatter.open-board-tab
 
 The human is "${humanName()}": DMs and @${humanName()} mentions reach them as a
 Herdr toast notification, and they read/post like anyone else.
@@ -982,5 +982,6 @@ function openPane(entrypoint: string, placement: string | null = null): void {
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
 export const hookOpenBoard = (): void => openPane('board');
+export const hookOpenBoardTab = (): void => openPane('board', 'tab');
 export const hookOpenChat = (): void => openPane('chat');
 export const hookOpenChatTab = (): void => openPane('chat', 'tab');

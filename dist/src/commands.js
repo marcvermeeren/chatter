@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.hookOpenChatTab = exports.hookOpenChat = exports.hookOpenBoard = void 0;
+exports.hookOpenChatTab = exports.hookOpenChat = exports.hookOpenBoardTab = exports.hookOpenBoard = void 0;
 exports.cmdSend = cmdSend;
 exports.cmdPost = cmdPost;
 exports.cmdChat = cmdChat;
@@ -942,8 +942,8 @@ function help() {
 Open the chat: prefix+alt+c (popup) or prefix+alt+t (tab) once chatter setup binds
 them — same as: herdr plugin action invoke chatter.open-chat-tab, or herdr plugin
 pane open --plugin chatter --entrypoint chat --placement split
-Open the board: prefix+alt+b (popup) — same as: herdr plugin action invoke
-chatter.open-board
+Open the board: prefix+alt+b (popup) or prefix+alt+shift+b (tab) once setup binds
+them — same as: herdr plugin action invoke chatter.open-board-tab
 
 The human is "${(0, db_1.humanName)()}": DMs and @${(0, db_1.humanName)()} mentions reach them as a
 Herdr toast notification, and they read/post like anyone else.
@@ -1094,6 +1094,8 @@ function openPane(entrypoint, placement = null) {
 }
 const hookOpenBoard = () => openPane('board');
 exports.hookOpenBoard = hookOpenBoard;
+const hookOpenBoardTab = () => openPane('board', 'tab');
+exports.hookOpenBoardTab = hookOpenBoardTab;
 const hookOpenChat = () => openPane('chat');
 exports.hookOpenChat = hookOpenChat;
 const hookOpenChatTab = () => openPane('chat', 'tab');

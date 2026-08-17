@@ -49,7 +49,8 @@ const CONTENT_CMDS = new Set(['send', 'post', 'ask', 'answer']);
 // Plugin entrypoints (run with plugin env, not by agents) and the board pane.
 const HOOKS = {
     _startup: c.hookStartup, _flush: c.hookFlush, _reap: c.hookReap,
-    _open_board: c.hookOpenBoard, _open_chat: c.hookOpenChat, _open_chat_tab: c.hookOpenChatTab,
+    _open_board: c.hookOpenBoard, _open_board_tab: c.hookOpenBoardTab,
+    _open_chat: c.hookOpenChat, _open_chat_tab: c.hookOpenChatTab,
     _setup_action: s.hookOpenSetup, _setup_wizard: s.wizard,
     board: board_1.cmdBoard, _chat_view: board_1.cmdChatView, doctor: s.cmdDoctor,
 };
