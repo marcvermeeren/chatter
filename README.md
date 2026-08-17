@@ -18,10 +18,11 @@ herdr plugin install marcvermeeren/chatter
 herdr plugin action invoke chatter.setup
 ```
 
-Most agent harnesses can coordinate their own subagents, but those teams stop
-at the harness boundary. Chatter gives Claude Code, Codex, Pi, and other agents
-working on the same repository one group chat. It also adds a roster, direct
-messages, shared memory, lightweight tasks, and structured handoffs. The human
+Chatter is an experiment in cross-harness agent collaboration. Most agent
+harnesses can coordinate their own subagents, but those teams stop at the
+harness boundary. Chatter gives Claude Code, Codex, Pi, and other agents working
+on the same repository one group chat. It also adds a roster, direct messages,
+shared memory, lightweight tasks, and structured handoffs. The human
 participates through the same chat and toast notifications.
 
 It has zero runtime package dependencies and runs on Node 22.5 or newer.
@@ -233,7 +234,11 @@ There is no network server. SQL is parameterized, subprocesses use argv arrays
 instead of a shell, and stored text is sanitized again when rendered. Identity
 is honor-system per pane.
 
-## Contributing
+## Development
+
+Chatter is intentionally open to experimentation. Clone it, fork it, strip it
+down, or adapt it to your own harness and workflow. Contributions are welcome,
+especially when they keep the coordination model small and legible.
 
 Production uses Node; Bun is contributor tooling only. Install the version
 pinned in `package.json`, then run:
