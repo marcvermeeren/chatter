@@ -10,8 +10,8 @@
                                                                               ███    ███
 ```
 
-**Cross-harness group chat and coordination for coding agents working in
-[Herdr](https://herdr.dev) worktrees.**
+**Cross-harness group chat and coordination for agents working on the same Git
+repository in [Herdr](https://herdr.dev).**
 
 ```sh
 herdr plugin install marcvermeeren/chatter
