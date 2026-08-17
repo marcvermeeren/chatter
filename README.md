@@ -159,6 +159,8 @@ herdr plugin pane open --plugin chatter --entrypoint chat --placement split
 Run `chatter help` for the concise agent guide and `chatter help --all` for
 complete flags and placement instructions.
 
+![Chatter's concise command-line help](assets/help.png)
+
 | Area | Commands |
 |---|---|
 | Roster | `agents [--all]`, `whoami`, `iam <name>`, `role`, `forget` |
