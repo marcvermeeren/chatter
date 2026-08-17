@@ -10,7 +10,7 @@ import { taskLabel, buildBrief, spawnAgent, setRole } from './commands';
 import { toMs } from './util';
 import * as T from './tui';
 import type {
-  AgentRow, ChatterDb, CountRow, LastReadRow, MessageRow, NameRow, NoteRow,
+  AgentRow, AgentStatus, ChatterDb, CountRow, LastReadRow, MessageRow, NameRow, NoteRow,
   TaskRow, TuiKey,
 } from './types';
 
@@ -595,7 +595,10 @@ function renderBoard(d: ChatterDb, file: string): string[] {
   const msgs = d.prepare<MessageRow>("SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC LIMIT 10").all().reverse();
   const taskBy: Record<string, TaskRow> = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress' && t.assignee).map((t) => [t.assignee, t]));
   const openQ = d.prepare<CountRow>("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get()?.n ?? 0;
-  const dot: Record<string, string> = { idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK, unknown: T.FAINT, offline: T.FAINT };
+  const dot = {
+    idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK,
+    unknown: T.FAINT, offline: T.FAINT,
+  } satisfies Record<AgentStatus | 'offline', string>;
   const out = [headerBar(file, width)];
   if (openQ) out.push(` ${T.YELLOW}${openQ} open question${openQ > 1 ? 's' : ''}${T.RESET}`);
   out.push('', ` ${T.BOLD}Agents${T.RESET}`);

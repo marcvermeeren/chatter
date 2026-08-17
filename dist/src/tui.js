@@ -119,8 +119,9 @@ const KEYS = {
     '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
     '\x1b[F': 'end', '\x1b[4~': 'end', '\x1bOF': 'end', '\x1b[H': 'home', '\x1b[1~': 'home', '\x1bOH': 'home',
 };
+const isKeySequence = (value) => Object.hasOwn(KEYS, value);
 function decodeKey(s) {
-    if (s in KEYS)
+    if (isKeySequence(s))
         return { type: KEYS[s] };
     if (s.startsWith('\x1b'))
         return { type: 'other' }; // unknown escape sequence

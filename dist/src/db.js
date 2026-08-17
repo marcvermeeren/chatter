@@ -150,11 +150,16 @@ function openDbFile(file) {
         exec: (sql) => d.exec(sql),
         prepare: (sql) => {
             const statement = d.prepare(sql);
+            const all = (...params) => {
+                // SAFETY: node:sqlite cannot infer a row from SQL text. The query owner
+                // supplies Row, and SQLite returns one plain object for each result row.
+                return statement.all(...params);
+            };
             return {
-                all: (...params) => statement.all(...params),
+                all,
                 // `all()[0]` avoids Node 22.5's null-filled phantom `get()` row while
                 // preserving legitimate rows (including aggregate rows containing null).
-                get: (...params) => statement.all(...params)[0],
+                get: (...params) => all(...params)[0],
                 run: (...params) => statement.run(...params),
             };
         },

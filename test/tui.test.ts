@@ -18,6 +18,7 @@ test('wrapping and visible width handle ANSI independently', () => {
 test('raw terminal keys decode into an explicit union', () => {
   assert.deepEqual(decodeKey('\x1b[A'), { type: 'up' });
   assert.deepEqual(decodeKey('x'), { type: 'text', text: 'x' });
+  assert.deepEqual(decodeKey('toString'), { type: 'text', text: 'toString' });
   assert.deepEqual(decodeKey('\x1b[99~'), { type: 'other' });
 });
 

@@ -102,8 +102,9 @@ const KEYS = {
   '\x1b[5~': 'pgup', '\x1b[6~': 'pgdn',
   '\x1b[F': 'end', '\x1b[4~': 'end', '\x1bOF': 'end', '\x1b[H': 'home', '\x1b[1~': 'home', '\x1bOH': 'home',
 } as const;
+const isKeySequence = (value: string): value is keyof typeof KEYS => Object.hasOwn(KEYS, value);
 export function decodeKey(s: string): import('./types').TuiKey {
-  if (s in KEYS) return { type: KEYS[s as keyof typeof KEYS] };
+  if (isKeySequence(s)) return { type: KEYS[s] };
   if (s.startsWith('\x1b')) return { type: 'other' }; // unknown escape sequence
   const text = s.replace(/[\x00-\x1f\x7f]/g, '');
   return text ? { type: 'text', text } : { type: 'other' };

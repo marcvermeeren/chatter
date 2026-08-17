@@ -25,8 +25,16 @@ let _live = null;
 function isRecord(value) {
     return typeof value === 'object' && value !== null;
 }
-const AGENT_STATUSES = new Set(['idle', 'done', 'working', 'blocked', 'unknown']);
-const agentStatus = (value) => typeof value === 'string' && AGENT_STATUSES.has(value) ? value : undefined;
+function agentStatus(value) {
+    switch (value) {
+        case 'idle':
+        case 'done':
+        case 'working':
+        case 'blocked':
+        case 'unknown': return value;
+        default: return undefined;
+    }
+}
 function agentList(value) {
     if (!isRecord(value) || !isRecord(value.result) || !Array.isArray(value.result.agents))
         return [];
