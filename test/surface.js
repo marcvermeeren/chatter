@@ -9,8 +9,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const entry = process.env.CHATTER_ENTRY || path.join(root, 'bin', 'chatter.js');
-const sourceEntry = process.env.CHATTER_SOURCE_ENTRY || entry;
+const entry = process.env.CHATTER_ENTRY || path.join(root, 'dist', 'bin', 'chatter.js');
+const sourceEntry = process.env.CHATTER_SOURCE_ENTRY || path.join(root, 'bin', 'chatter.ts');
 
 const expectedCommands = [
   'agents', 'send', 'inbox', 'post', 'chat', 'note', 'notes', 'search',
@@ -29,7 +29,7 @@ const expectedManifestEntrypoints = [
 ];
 
 function registryKeys(source, name) {
-  const match = source.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n\\};`));
+  const match = source.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n\\}(?: as const(?: satisfies [^;]+)?)?;`));
   if (!match) throw new Error(`could not find ${name} registry in ${sourceEntry}`);
   return [...match[1].matchAll(/(?:^|,)\s*([A-Za-z_$][\w$]*):/gm)].map((m) => m[1]);
 }

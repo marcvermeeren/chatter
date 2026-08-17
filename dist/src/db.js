@@ -1,46 +1,63 @@
 'use strict';
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.dbFile = exports.now = void 0;
+exports.gitInfo = gitInfo;
+exports.configRoot = configRoot;
+exports.humanName = humanName;
+exports.stateRoot = stateRoot;
+exports.openDbFile = openDbFile;
+exports.repoDbFile = repoDbFile;
+exports.listRepoDbFiles = listRepoDbFiles;
+exports.db = db;
+exports.logEvent = logEvent;
 // Durable state, scoped PER REPOSITORY: each repo gets its own SQLite DB under
 // the plugin state dir. Worktrees of one repo share a DB (keyed by the git
 // common dir); unrelated repos are isolated universes.
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
-const { PLUGIN_ID, HERDR } = require('./herdr');
-const { die } = require('./util');
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_os_1 = __importDefault(require("node:os"));
+const node_crypto_1 = __importDefault(require("node:crypto"));
+const node_child_process_1 = require("node:child_process");
+const node_sqlite_1 = require("node:sqlite");
+const herdr_1 = require("./herdr");
+const util_1 = require("./util");
 // One git spawn: branch, worktree toplevel, and the shared common dir that
 // identifies the repo across all of its linked worktrees.
 let _git;
 function gitInfo(cwd = process.cwd()) {
     if (_git && _git.cwd === cwd)
         return _git;
-    const r = spawnSync('git', ['-C', cwd, 'rev-parse',
+    const r = (0, node_child_process_1.spawnSync)('git', ['-C', cwd, 'rev-parse',
         '--path-format=absolute', '--show-toplevel', '--git-common-dir'], { encoding: 'utf8' });
     if (r.status !== 0)
         return (_git = { cwd, branch: null, toplevel: null, repoRoot: null });
     const [toplevel, commonDir] = r.stdout.trim().split('\n');
+    if (!commonDir)
+        return (_git = { cwd, branch: null, toplevel: toplevel || null, repoRoot: null });
     let repoRoot = commonDir;
     try {
-        repoRoot = fs.realpathSync(commonDir);
+        repoRoot = node_fs_1.default.realpathSync(commonDir);
     }
     catch { /* keep as reported */ }
-    if (path.basename(repoRoot) === '.git')
-        repoRoot = path.dirname(repoRoot);
+    if (node_path_1.default.basename(repoRoot) === '.git')
+        repoRoot = node_path_1.default.dirname(repoRoot);
     // Separate call: --abbrev-ref HEAD errors in a repo with no commits yet.
-    const b = spawnSync('git', ['-C', cwd, 'branch', '--show-current'], { encoding: 'utf8' });
+    const b = (0, node_child_process_1.spawnSync)('git', ['-C', cwd, 'branch', '--show-current'], { encoding: 'utf8' });
     const branch = b.status === 0 ? b.stdout.trim() : '';
     return (_git = { cwd, branch: branch || null, toplevel: toplevel || null, repoRoot });
 }
 // User-editable plugin config (e.g. the human's chat name).
 function configRoot() {
     return process.env.HERDR_PLUGIN_CONFIG_DIR
-        || path.join(os.homedir(), '.config', 'herdr', 'plugins', 'config', PLUGIN_ID);
+        || node_path_1.default.join(node_os_1.default.homedir(), '.config', 'herdr', 'plugins', 'config', herdr_1.PLUGIN_ID);
 }
 // The human's name in chatter (set with `chatter iam <name>`).
 function humanName() {
     try {
-        const n = fs.readFileSync(path.join(configRoot(), 'name'), 'utf8').trim();
+        const n = node_fs_1.default.readFileSync(node_path_1.default.join(configRoot(), 'name'), 'utf8').trim();
         if (n)
             return n;
     }
@@ -50,7 +67,7 @@ function humanName() {
 // Canonicalize so path comparisons (repo-boundary checks) never break on
 // symlinks — SQLite reports resolved paths, e.g. /private/var vs /var on macOS.
 const real = (p) => { try {
-    return fs.realpathSync(p);
+    return node_fs_1.default.realpathSync(p);
 }
 catch {
     return p;
@@ -59,28 +76,28 @@ function stateRoot() {
     if (process.env.HERDR_PLUGIN_STATE_DIR)
         return real(process.env.HERDR_PLUGIN_STATE_DIR);
     // Herdr's layout on Unix (verified 0.8.0): ~/.local/state/herdr/plugins/<id>
-    const conventional = path.join(os.homedir(), '.local', 'state', 'herdr', 'plugins', PLUGIN_ID);
-    if (fs.existsSync(conventional))
+    const conventional = node_path_1.default.join(node_os_1.default.homedir(), '.local', 'state', 'herdr', 'plugins', herdr_1.PLUGIN_ID);
+    if (node_fs_1.default.existsSync(conventional))
         return real(conventional);
     // Fall back to the pointer the startup hook writes into the config dir.
-    const cfg = spawnSync(HERDR, ['plugin', 'config-dir', PLUGIN_ID], { encoding: 'utf8' });
+    const cfg = (0, node_child_process_1.spawnSync)(herdr_1.HERDR, ['plugin', 'config-dir', herdr_1.PLUGIN_ID], { encoding: 'utf8' });
     const cfgDir = (cfg.stdout || '').trim();
     if (cfgDir) {
-        const pointer = path.join(cfgDir, 'state-dir');
-        if (fs.existsSync(pointer)) {
-            const p = fs.readFileSync(pointer, 'utf8').trim();
-            if (p && fs.existsSync(p))
+        const pointer = node_path_1.default.join(cfgDir, 'state-dir');
+        if (node_fs_1.default.existsSync(pointer)) {
+            const p = node_fs_1.default.readFileSync(pointer, 'utf8').trim();
+            if (p && node_fs_1.default.existsSync(p))
                 return real(p);
         }
     }
-    const fallback = path.join(os.homedir(), '.local', 'state', 'herdr-chatter');
-    fs.mkdirSync(fallback, { recursive: true });
+    const fallback = node_path_1.default.join(node_os_1.default.homedir(), '.local', 'state', 'herdr-chatter');
+    node_fs_1.default.mkdirSync(fallback, { recursive: true });
     return real(fallback);
 }
 const sanitizeKey = (s) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 40) || 'repo';
 function repoKey(repoRoot) {
-    const hash = crypto.createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
-    return `${sanitizeKey(path.basename(repoRoot))}-${hash}`;
+    const hash = node_crypto_1.default.createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
+    return `${sanitizeKey(node_path_1.default.basename(repoRoot))}-${hash}`;
 }
 const SCHEMA = `
   PRAGMA busy_timeout = 3000;
@@ -117,28 +134,29 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages (to_agent, read_at);
 `;
 function openDbFile(file) {
-    const { DatabaseSync } = require('node:sqlite');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const d = new DatabaseSync(file);
+    node_fs_1.default.mkdirSync(node_path_1.default.dirname(file), { recursive: true });
+    const d = new node_sqlite_1.DatabaseSync(file);
     d.exec(SCHEMA);
     // Migration for pre-v0.16 universes.
     try {
         d.exec('ALTER TABLE agents ADD COLUMN departed_at TEXT');
     }
     catch { /* exists */ }
+    // All result-shape assertions stay behind this boundary. Callers must supply
+    // an explicit row type whenever they read from a statement.
     return d;
 }
 function repoDbFile(repoRoot) {
-    return path.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
+    return node_path_1.default.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
 }
 // Every per-repo DB currently on disk (for hooks and the board).
 function listRepoDbFiles() {
-    const dir = path.join(stateRoot(), 'repos');
-    if (!fs.existsSync(dir))
+    const dir = node_path_1.default.join(stateRoot(), 'repos');
+    if (!node_fs_1.default.existsSync(dir))
         return [];
-    return fs.readdirSync(dir)
-        .map((k) => path.join(dir, k, 'chatter.db'))
-        .filter((f) => fs.existsSync(f));
+    return node_fs_1.default.readdirSync(dir)
+        .map((k) => node_path_1.default.join(dir, k, 'chatter.db'))
+        .filter((f) => node_fs_1.default.existsSync(f));
 }
 // The calling context's repo DB (the default for all commands).
 let _db = null;
@@ -147,7 +165,7 @@ function db() {
         return _db;
     const g = gitInfo();
     if (!g.repoRoot)
-        die('chatter is per-repo — run it inside a git repository');
+        (0, util_1.die)('chatter is per-repo — run it inside a git repository');
     _db = openDbFile(repoDbFile(g.repoRoot));
     // Record which repo this universe belongs to (orphan detection in
     // `chatter data` — agent rows alone miss human-only universes).
@@ -156,14 +174,20 @@ function db() {
     return _db;
 }
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+exports.now = now;
 // Which on-disk file a handle is operating on (repo-boundary checks).
-const dbFile = (d) => d.prepare("SELECT file FROM pragma_database_list WHERE name='main'").get().file;
+const dbFile = (d) => {
+    const row = d.prepare("SELECT file FROM pragma_database_list WHERE name='main'").get();
+    if (!row)
+        throw new Error('SQLite main database is unavailable');
+    return row.file;
+};
+exports.dbFile = dbFile;
 // Append-only activity ledger. Silent for now; future briefs/reports read it.
 function logEvent(actor, kind, ref, data = null, d = db()) {
     try {
         d.prepare('INSERT INTO events (at, actor, kind, ref, data) VALUES (?,?,?,?,?)')
-            .run(now(), actor, kind, ref, data ? JSON.stringify(data).slice(0, 1024) : null);
+            .run((0, exports.now)(), actor, kind, ref, data ? JSON.stringify(data).slice(0, 1024) : null);
     }
     catch { /* the ledger must never break a command */ }
 }
-module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, dbFile, now, logEvent };

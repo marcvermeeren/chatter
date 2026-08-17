@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["bin/chatter.js", "scripts/*.mjs", "test/surface.js"],
+  "entry": ["bin/chatter.ts", "scripts/*.mjs", "test/**/*.test.ts"],
   "project": ["bin/**/*.{js,ts}", "src/**/*.{js,ts}", "scripts/**/*.mjs", "test/**/*.{js,ts}"],
-  "ignore": ["dist/**"],
-  "ignoreBinaries": ["sh", "sqlite3"]
+  "ignore": []
 }

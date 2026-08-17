@@ -1,30 +1,34 @@
 'use strict';
 // Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const { PLUGIN_ID, HERDR, herdr, sessionAgents } = require('./herdr');
-const { configRoot, humanName, stateRoot, listRepoDbFiles, openDbFile, gitInfo } = require('./db');
-const { die, parseFlags } = require('./util');
-const T = require('./tui');
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { PLUGIN_ID, HERDR, herdr, isRecord, sessionAgents } from './herdr';
+import { configRoot, humanName, stateRoot, gitInfo } from './db';
+import { die, parseFlags } from './util';
+import * as T from './tui';
+import { ensurePointerAndSymlink } from './commands';
+import { nameTaken } from './team';
+import { registration, updateStatus } from './update';
+import type { Identity } from './types';
 
 // The wordmark lives with the other painting primitives; re-exported here
 // because setup is where it was born and callers still ask for it.
-const { logoLines } = T;
+export const { logoLines } = T;
 
 // -------------------------------------------------------------- config edits
 
 const configToml = () => path.join(os.homedir(), '.config', 'herdr', 'config.toml');
-const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const TOAST_BLOCK = `
 # added by chatter setup
 [ui.toast]
 delivery = "herdr"
 `;
-const keyBlock = (key, action, description) => `
+const keyBlock = (key: string, action: string, description: string): string => `
 # added by chatter setup
 [[keys.command]]
 key = "${key}"
@@ -36,16 +40,17 @@ description = "${description}"
 // Is this exact plugin action already bound? The closing quote matters:
 // "chatter.open-chat" is a prefix of "chatter.open-chat-tab", so a substring
 // test would report the popup bound when only the tab binding exists.
-const actionBound = (text, action) =>
+const actionBound = (text: string, action: string): boolean =>
   new RegExp(`command\\s*=\\s*"${escRe(`${PLUGIN_ID}.${action}`)}"`).test(text);
 
 // Apply toast/keybinding config; returns human-readable report lines.
 // Each binding is decided independently: already bound, key taken, or added.
-function editHerdrConfig({ toasts, key, tabKey = null }) {
+interface SetupConfig { toasts: boolean; key: string | null; tabKey?: string | null }
+function editHerdrConfig({ toasts, key, tabKey = null }: SetupConfig): string[] {
   const file = configToml();
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { /* new file */ }
-  const report = [];
+  const report: string[] = [];
   let out = text;
   if (toasts) {
     if (/^\s*\[ui\.toast\]/m.test(text)) report.push('toasts: existing [ui.toast] setting respected');
@@ -79,27 +84,23 @@ function editHerdrConfig({ toasts, key, tabKey = null }) {
 
 // ------------------------------------------------------------------- doctor
 
-const { nameTaken } = require('./team');
+interface DoctorCheck { ok: boolean | null; label: string; hint?: string }
 
-function doctorChecks() {
-  const checks = [];
-  const add = (ok, label, hint) => checks.push({ ok, label, hint });
+function doctorChecks(): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const add = (ok: boolean | null, label: string, hint?: string): void => { checks.push({ ok, label, hint }); };
   const major = parseInt(process.versions.node, 10);
   add(major >= 22, `Node ${process.versions.node}`, 'install Node 22+');
   try { require('node:sqlite'); add(true, 'node:sqlite available'); }
   catch { add(false, 'node:sqlite available', 'Node build lacks built-in SQLite'); }
   const st = herdr(['status']);
   add(st.ok, 'Herdr server reachable', 'start Herdr, or run inside a Herdr session');
-  const pl = herdr(['plugin', 'list', '--json']);
-  const entry = pl.ok && pl.json && pl.json.result
-    ? (pl.json.result.plugins || []).find((p) => p.plugin_id === PLUGIN_ID)
-    : null;
+  const entry = registration();
   add(!!entry, 'plugin registered with Herdr', `herdr plugin install/link this directory`);
   // Best effort, hard-capped, silent when it fails: being offline must never
   // slow doctor down or paint it red. Informational only, never a ✗.
   if (entry) {
     try {
-      const { updateStatus } = require('./update');
       const st = updateStatus({ source: entry.source, root: entry.plugin_root }, { timeout: 3000 });
       if (st.state === 'behind') add(null, 'update available — run: chatter update');
       else if (st.state === 'current') add(null, `chatter is up to date (v${entry.version || '?'})`);
@@ -130,7 +131,7 @@ function doctorChecks() {
   return checks;
 }
 
-function renderChecks(checks) {
+function renderChecks(checks: readonly DoctorCheck[]): string[] {
   return checks.map((c) => c.ok === null
     ? `   ${T.FAINT}ℹ${T.RESET}  ${T.FAINT}${c.label}${T.RESET}`
     : c.ok
@@ -138,7 +139,7 @@ function renderChecks(checks) {
       : `   ${T.NEWMARK}✗${T.RESET}  ${c.label}${c.hint ? `  ${T.FAINT}→ ${c.hint}${T.RESET}` : ''}`);
 }
 
-function cmdDoctor() {
+export function cmdDoctor(): void {
   const width = process.stdout.columns || 100;
   console.log(logoLines(width).join('\n'));
   const checks = doctorChecks();
@@ -150,20 +151,21 @@ function cmdDoctor() {
 
 // -------------------------------------------------------------------- apply
 
-function applySetup({ name, toasts, key, tabKey = null }) {
-  const report = [];
+interface ApplySetupOptions extends SetupConfig { name: string | null }
+function applySetup({ name, toasts, key, tabKey = null }: ApplySetupOptions): string[] {
+  const report: string[] = [];
   if (name) {
     fs.mkdirSync(configRoot(), { recursive: true });
     fs.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
     report.push(`you are "${name}"`);
   }
-  const { ensurePointerAndSymlink } = require('./commands');
   ensurePointerAndSymlink();
   report.push('chatter linked into ~/.local/bin');
   report.push(...editHerdrConfig({ toasts, key, tabKey }));
   if (toasts) {
     const r = herdr(['notification', 'show', 'chatter', '--body', `hi ${name || humanName()} — notifications work`, '--sound', 'done']);
-    report.push(r.ok && r.json && r.json.result.shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
+    const shown = r.ok && isRecord(r.json) && isRecord(r.json.result) && r.json.result.shown === true;
+    report.push(shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
   }
   return report;
 }
@@ -175,7 +177,7 @@ const defaultName = () => {
   return n || 'user';
 };
 
-function cmdSetup(me, args) {
+export function cmdSetup(me: Identity, args: readonly string[]): void {
   if (!me.human) die('chatter setup is human-only');
   const opts = parseFlags(args, {
     yes: false, name: null, key: 'prefix+alt+c', 'tab-key': 'prefix+alt+t',
@@ -208,12 +210,25 @@ function cmdSetup(me, args) {
 
 // ----------------------------------------------------------- wizard (popup)
 
-const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 };
+const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 } as const;
+type SetupStep = typeof STEPS[keyof typeof STEPS];
 
-function wizard() {
+interface SetupState {
+  step: SetupStep;
+  name: string;
+  toasts: boolean;
+  key: string;
+  tabKey: string;
+  error: string;
+  report: string[] | null;
+  checks: DoctorCheck[] | null;
+  toastsExisting: boolean;
+}
+
+export function wizard(): void {
   const painter = T.makePainter();
   const width = () => process.stdout.columns || 100;
-  const state = {
+  const state: SetupState = {
     step: STEPS.NAME,
     name: defaultName(),
     toasts: true,
@@ -259,7 +274,7 @@ function wizard() {
   };
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on('data', (b) => {
+  process.stdin.on('data', (b: Buffer) => {
     const key = T.decodeKey(b.toString());
     if (key.type === 'esc' || key.type === 'close') process.exit(0);
     if (state.step === STEPS.NAME) {
@@ -303,9 +318,7 @@ function wizard() {
   render();
 }
 
-function hookOpenSetup() {
+export function hookOpenSetup(): void {
   const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'setup']);
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
-
-module.exports = { cmdDoctor, cmdSetup, wizard, hookOpenSetup, logoLines, editHerdrConfig };

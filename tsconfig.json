@@ -8,10 +8,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "useUnknownInCatchVariables": true,
-    "allowJs": true,
-    "checkJs": false,
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["bin/**/*.js", "src/**/*.js"]
+  "include": ["bin/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
 }

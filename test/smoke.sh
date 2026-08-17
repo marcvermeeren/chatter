@@ -11,8 +11,8 @@ export HERDR_BIN_PATH="/nonexistent-herdr"   # forces empty live roster
 unset HERDR_PANE_ID || true                  # caller is the human
 mkdir -p "$HERDR_PLUGIN_STATE_DIR" "$HERDR_PLUGIN_CONFIG_DIR"
 
-CHATTER_ENTRY="${CHATTER_ENTRY:-$ROOT/bin/chatter.js}"
-CHATTER_MODULE_ROOT="${CHATTER_MODULE_ROOT:-$ROOT/src}"
+CHATTER_ENTRY="${CHATTER_ENTRY:-$ROOT/dist/bin/chatter.js}"
+CHATTER_MODULE_ROOT="${CHATTER_MODULE_ROOT:-$ROOT/dist/src}"
 CH="node --no-warnings $CHATTER_ENTRY"
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok   - $1"; }
@@ -246,12 +246,12 @@ echo "$HI_OUT" | grep -q "human-only" && ok "agent cannot change human identity"
 ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db >/dev/null 2>&1 && ok "universes survived blocked purge" || fail "universes survived blocked purge"
 
 echo "# boundary lint: repo-scoped code must not touch the session-wide roster"
-if grep -n 'sessionAgents' "$ROOT/src/commands.js" "$ROOT/src/board.js" "$ROOT/bin/chatter.js" >/dev/null 2>&1; then
+if grep -n 'sessionAgents' "$ROOT/src/commands.ts" "$ROOT/src/board.ts" "$ROOT/bin/chatter.ts" >/dev/null 2>&1; then
   fail "sessionAgents leaked into repo-scoped code (commands/board/bin)"
 else
-  ok "session-wide roster quarantined to team.js/setup.js"
+  ok "session-wide roster quarantined to team.ts/setup.ts"
 fi
-grep -q 'teamAgents' "$ROOT/src/commands.js" && grep -q 'teamAgents' "$ROOT/src/board.js" \
+grep -q 'teamAgents' "$ROOT/src/commands.ts" && grep -q 'teamAgents' "$ROOT/src/board.ts" \
   && ok "repo-scoped surfaces use teamAgents(d)" || fail "repo-scoped surfaces use teamAgents(d)"
 grep -rn 'liveAgents(' "$ROOT/src" "$ROOT/bin" >/dev/null 2>&1 \
   && fail "old liveAgents() name still referenced" || ok "old liveAgents() name fully retired"

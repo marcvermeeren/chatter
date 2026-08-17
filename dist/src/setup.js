@@ -1,18 +1,63 @@
 'use strict';
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.logoLines = void 0;
+exports.cmdDoctor = cmdDoctor;
+exports.cmdSetup = cmdSetup;
+exports.wizard = wizard;
+exports.hookOpenSetup = hookOpenSetup;
 // Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const { PLUGIN_ID, HERDR, herdr, sessionAgents } = require('./herdr');
-const { configRoot, humanName, stateRoot, listRepoDbFiles, openDbFile, gitInfo } = require('./db');
-const { die, parseFlags } = require('./util');
-const T = require('./tui');
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_os_1 = __importDefault(require("node:os"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_child_process_1 = require("node:child_process");
+const herdr_1 = require("./herdr");
+const db_1 = require("./db");
+const util_1 = require("./util");
+const T = __importStar(require("./tui"));
+const commands_1 = require("./commands");
+const team_1 = require("./team");
+const update_1 = require("./update");
 // The wordmark lives with the other painting primitives; re-exported here
 // because setup is where it was born and callers still ask for it.
-const { logoLines } = T;
+({ logoLines: exports.logoLines } = T);
 // -------------------------------------------------------------- config edits
-const configToml = () => path.join(os.homedir(), '.config', 'herdr', 'config.toml');
+const configToml = () => node_path_1.default.join(node_os_1.default.homedir(), '.config', 'herdr', 'config.toml');
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const TOAST_BLOCK = `
 # added by chatter setup
@@ -24,20 +69,18 @@ const keyBlock = (key, action, description) => `
 [[keys.command]]
 key = "${key}"
 type = "plugin_action"
-command = "${PLUGIN_ID}.${action}"
+command = "${herdr_1.PLUGIN_ID}.${action}"
 description = "${description}"
 `;
 // Is this exact plugin action already bound? The closing quote matters:
 // "chatter.open-chat" is a prefix of "chatter.open-chat-tab", so a substring
 // test would report the popup bound when only the tab binding exists.
-const actionBound = (text, action) => new RegExp(`command\\s*=\\s*"${escRe(`${PLUGIN_ID}.${action}`)}"`).test(text);
-// Apply toast/keybinding config; returns human-readable report lines.
-// Each binding is decided independently: already bound, key taken, or added.
+const actionBound = (text, action) => new RegExp(`command\\s*=\\s*"${escRe(`${herdr_1.PLUGIN_ID}.${action}`)}"`).test(text);
 function editHerdrConfig({ toasts, key, tabKey = null }) {
     const file = configToml();
     let text = '';
     try {
-        text = fs.readFileSync(file, 'utf8');
+        text = node_fs_1.default.readFileSync(file, 'utf8');
     }
     catch { /* new file */ }
     const report = [];
@@ -70,20 +113,18 @@ function editHerdrConfig({ toasts, key, tabKey = null }) {
         }
     }
     if (out !== text) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
+        node_fs_1.default.mkdirSync(node_path_1.default.dirname(file), { recursive: true });
         if (text)
-            fs.copyFileSync(file, `${file}.bak-${Math.floor(Date.now() / 1000)}`);
-        fs.writeFileSync(file, out);
-        const r = herdr(['server', 'reload-config']);
+            node_fs_1.default.copyFileSync(file, `${file}.bak-${Math.floor(Date.now() / 1000)}`);
+        node_fs_1.default.writeFileSync(file, out);
+        const r = (0, herdr_1.herdr)(['server', 'reload-config']);
         report.push(r.ok ? 'herdr config reloaded — changes active now' : 'config written (reload when Herdr is running)');
     }
     return report;
 }
-// ------------------------------------------------------------------- doctor
-const { nameTaken } = require('./team');
 function doctorChecks() {
     const checks = [];
-    const add = (ok, label, hint) => checks.push({ ok, label, hint });
+    const add = (ok, label, hint) => { checks.push({ ok, label, hint }); };
     const major = parseInt(process.versions.node, 10);
     add(major >= 22, `Node ${process.versions.node}`, 'install Node 22+');
     try {
@@ -93,19 +134,15 @@ function doctorChecks() {
     catch {
         add(false, 'node:sqlite available', 'Node build lacks built-in SQLite');
     }
-    const st = herdr(['status']);
+    const st = (0, herdr_1.herdr)(['status']);
     add(st.ok, 'Herdr server reachable', 'start Herdr, or run inside a Herdr session');
-    const pl = herdr(['plugin', 'list', '--json']);
-    const entry = pl.ok && pl.json && pl.json.result
-        ? (pl.json.result.plugins || []).find((p) => p.plugin_id === PLUGIN_ID)
-        : null;
+    const entry = (0, update_1.registration)();
     add(!!entry, 'plugin registered with Herdr', `herdr plugin install/link this directory`);
     // Best effort, hard-capped, silent when it fails: being offline must never
     // slow doctor down or paint it red. Informational only, never a ✗.
     if (entry) {
         try {
-            const { updateStatus } = require('./update');
-            const st = updateStatus({ source: entry.source, root: entry.plugin_root }, { timeout: 3000 });
+            const st = (0, update_1.updateStatus)({ source: entry.source, root: entry.plugin_root }, { timeout: 3000 });
             if (st.state === 'behind')
                 add(null, 'update available — run: chatter update');
             else if (st.state === 'current')
@@ -113,25 +150,25 @@ function doctorChecks() {
         }
         catch { /* the update probe must never break doctor */ }
     }
-    const link = path.join(os.homedir(), '.local', 'bin', 'chatter');
+    const link = node_path_1.default.join(node_os_1.default.homedir(), '.local', 'bin', 'chatter');
     let linkOk = false;
     try {
-        linkOk = fs.lstatSync(link).isSymbolicLink() && fs.existsSync(fs.realpathSync(link));
+        linkOk = node_fs_1.default.lstatSync(link).isSymbolicLink() && node_fs_1.default.existsSync(node_fs_1.default.realpathSync(link));
     }
     catch { /* absent */ }
     add(linkOk, '~/.local/bin/chatter symlink', 'run: chatter setup (or the _startup hook)');
-    add((process.env.PATH || '').split(':').includes(path.join(os.homedir(), '.local', 'bin')), '~/.local/bin on PATH', 'add to your shell profile: export PATH="$HOME/.local/bin:$PATH"');
+    add((process.env.PATH || '').split(':').includes(node_path_1.default.join(node_os_1.default.homedir(), '.local', 'bin')), '~/.local/bin on PATH', 'add to your shell profile: export PATH="$HOME/.local/bin:$PATH"');
     try {
-        fs.accessSync(stateRoot(), fs.constants.W_OK);
-        add(true, `state dir writable (${stateRoot()})`);
+        node_fs_1.default.accessSync((0, db_1.stateRoot)(), node_fs_1.default.constants.W_OK);
+        add(true, `state dir writable (${(0, db_1.stateRoot)()})`);
     }
     catch {
         add(false, 'state dir writable', 'check permissions on the plugin state dir');
     }
-    add(humanName() !== 'user', `human name set (${humanName()})`, 'run: chatter iam <name>');
+    add((0, db_1.humanName)() !== 'user', `human name set (${(0, db_1.humanName)()})`, 'run: chatter iam <name>');
     let cfg = '';
     try {
-        cfg = fs.readFileSync(configToml(), 'utf8');
+        cfg = node_fs_1.default.readFileSync(configToml(), 'utf8');
     }
     catch { /* none */ }
     add(/\[ui\.toast\]/.test(cfg) && !/delivery\s*=\s*"off"/.test(cfg), 'toast notifications enabled', 'run: chatter setup (adds [ui.toast] delivery = "herdr")');
@@ -140,10 +177,10 @@ function doctorChecks() {
     // note when not — never a reported problem.
     const tabBound = actionBound(cfg, 'open-chat-tab');
     add(tabBound || null, tabBound ? 'chat tab keybinding bound' : 'chat tab keybinding not bound (optional — run: chatter setup)');
-    const g = gitInfo();
-    add(null, g.repoRoot ? `current repo: ${path.basename(g.repoRoot)}` : 'not inside a git repo (chatter is per-repo)');
+    const g = (0, db_1.gitInfo)();
+    add(null, g.repoRoot ? `current repo: ${node_path_1.default.basename(g.repoRoot)}` : 'not inside a git repo (chatter is per-repo)');
     // session-wide by design: doctor is a machine-level diagnostic
-    add(null, `live agents visible (session-wide): ${sessionAgents().length}`);
+    add(null, `live agents visible (session-wide): ${(0, herdr_1.sessionAgents)().length}`);
     return checks;
 }
 function renderChecks(checks) {
@@ -155,7 +192,7 @@ function renderChecks(checks) {
 }
 function cmdDoctor() {
     const width = process.stdout.columns || 100;
-    console.log(logoLines(width).join('\n'));
+    console.log((0, exports.logoLines)(width).join('\n'));
     const checks = doctorChecks();
     console.log(renderChecks(checks).join('\n'));
     const bad = checks.filter((c) => c.ok === false).length;
@@ -163,49 +200,48 @@ function cmdDoctor() {
     if (bad)
         process.exit(1);
 }
-// -------------------------------------------------------------------- apply
 function applySetup({ name, toasts, key, tabKey = null }) {
     const report = [];
     if (name) {
-        fs.mkdirSync(configRoot(), { recursive: true });
-        fs.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
+        node_fs_1.default.mkdirSync((0, db_1.configRoot)(), { recursive: true });
+        node_fs_1.default.writeFileSync(node_path_1.default.join((0, db_1.configRoot)(), 'name'), name + '\n');
         report.push(`you are "${name}"`);
     }
-    const { ensurePointerAndSymlink } = require('./commands');
-    ensurePointerAndSymlink();
+    (0, commands_1.ensurePointerAndSymlink)();
     report.push('chatter linked into ~/.local/bin');
     report.push(...editHerdrConfig({ toasts, key, tabKey }));
     if (toasts) {
-        const r = herdr(['notification', 'show', 'chatter', '--body', `hi ${name || humanName()} — notifications work`, '--sound', 'done']);
-        report.push(r.ok && r.json && r.json.result.shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
+        const r = (0, herdr_1.herdr)(['notification', 'show', 'chatter', '--body', `hi ${name || (0, db_1.humanName)()} — notifications work`, '--sound', 'done']);
+        const shown = r.ok && (0, herdr_1.isRecord)(r.json) && (0, herdr_1.isRecord)(r.json.result) && r.json.result.shown === true;
+        report.push(shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
     }
     return report;
 }
 // ------------------------------------------------------------- CLI: setup
 const defaultName = () => {
-    const n = os.userInfo().username.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z]+/, '').slice(0, 32);
+    const n = node_os_1.default.userInfo().username.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[^a-z]+/, '').slice(0, 32);
     return n || 'user';
 };
 function cmdSetup(me, args) {
     if (!me.human)
-        die('chatter setup is human-only');
-    const opts = parseFlags(args, {
+        (0, util_1.die)('chatter setup is human-only');
+    const opts = (0, util_1.parseFlags)(args, {
         yes: false, name: null, key: 'prefix+alt+c', 'tab-key': 'prefix+alt+t',
         'no-toasts': false, 'no-keybind': false,
     });
     const width = process.stdout.columns || 100;
-    console.log(logoLines(width).join('\n'));
+    console.log((0, exports.logoLines)(width).join('\n'));
     if (!opts.yes) {
-        die('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
+        (0, util_1.die)('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
             + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"]\n'
             + '                       [--tab-key "prefix+alt+t"] [--no-toasts] [--no-keybind]');
     }
     const name = (opts.name || defaultName()).toLowerCase();
-    const taken = nameTaken(name);
+    const taken = (0, team_1.nameTaken)(name);
     if (taken && opts.name)
-        die(`name "${name}" is ${taken} — rerun with --name <other>`);
+        (0, util_1.die)(`name "${name}" is ${taken} — rerun with --name <other>`);
     if (taken)
-        console.error(`note: default name "${name}" is ${taken} — keeping current name "${humanName()}"`);
+        console.error(`note: default name "${name}" is ${taken} — keeping current name "${(0, db_1.humanName)()}"`);
     const report = applySetup({
         name: taken ? null : name,
         toasts: !opts['no-toasts'],
@@ -217,7 +253,7 @@ function cmdSetup(me, args) {
     const checks = doctorChecks();
     console.log(renderChecks(checks).join('\n'));
     console.log(`\nopen the chat: ${T.BOLD}${opts.key}${T.RESET} as a popup · ${T.BOLD}${opts['tab-key']}${T.RESET} as a tab`
-        + `\n(or: herdr plugin pane open --plugin ${PLUGIN_ID} --entrypoint chat [--placement tab|split])`);
+        + `\n(or: herdr plugin pane open --plugin ${herdr_1.PLUGIN_ID} --entrypoint chat [--placement tab|split])`);
 }
 // ----------------------------------------------------------- wizard (popup)
 const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 };
@@ -234,7 +270,7 @@ function wizard() {
         report: null,
         checks: null,
         toastsExisting: /\[ui\.toast\]/.test((() => { try {
-            return fs.readFileSync(configToml(), 'utf8');
+            return node_fs_1.default.readFileSync(configToml(), 'utf8');
         }
         catch {
             return '';
@@ -242,7 +278,7 @@ function wizard() {
     };
     const field = T.field;
     const render = () => {
-        const out = [...logoLines(width())];
+        const out = [...(0, exports.logoLines)(width())];
         out.push(` ${T.BOLD}setup${T.RESET}`);
         out.push('');
         if (state.step === STEPS.NAME) {
@@ -290,7 +326,7 @@ function wizard() {
             else if (key.type === 'text')
                 state.name += key.text.toLowerCase().replace(/[^a-z0-9_-]/g, '');
             else if (key.type === 'enter') {
-                const taken = state.name ? nameTaken(state.name) : 'empty';
+                const taken = state.name ? (0, team_1.nameTaken)(state.name) : 'empty';
                 if (!state.name)
                     state.error = 'name required';
                 else if (taken)
@@ -333,8 +369,8 @@ function wizard() {
         }
         else if (state.step === STEPS.DONE && key.type === 'enter') {
             // Popups are singletons: exit first, then a detached child opens chat.
-            spawn(process.execPath, ['-e',
-                `setTimeout(()=>require('node:child_process').spawnSync(${JSON.stringify(HERDR)},['plugin','pane','open','--plugin',${JSON.stringify(PLUGIN_ID)},'--entrypoint','chat']),400)`], { detached: true, stdio: 'ignore' }).unref();
+            (0, node_child_process_1.spawn)(process.execPath, ['-e',
+                `setTimeout(()=>require('node:child_process').spawnSync(${JSON.stringify(herdr_1.HERDR)},['plugin','pane','open','--plugin',${JSON.stringify(herdr_1.PLUGIN_ID)},'--entrypoint','chat']),400)`], { detached: true, stdio: 'ignore' }).unref();
             process.exit(0);
         }
         render();
@@ -342,10 +378,9 @@ function wizard() {
     render();
 }
 function hookOpenSetup() {
-    const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'setup']);
+    const r = (0, herdr_1.herdr)(['plugin', 'pane', 'open', '--plugin', herdr_1.PLUGIN_ID, '--entrypoint', 'setup']);
     if (!r.ok) {
         console.error(r.raw);
         process.exit(1);
     }
 }
-module.exports = { cmdDoctor, cmdSetup, wizard, hookOpenSetup, logoLines, editHerdrConfig };

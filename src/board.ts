@@ -2,32 +2,39 @@
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
 
-const fs = require('node:fs');
-const path = require('node:path');
-const { matchLive, herdr } = require('./herdr');
-const { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } = require('./db');
-const { postToChat, teamAgents, sendMessage, nameTaken } = require('./team');
-const { taskLabel, buildBrief, spawnAgent, setRole } = require('./commands');
-const { sanitizeName } = require('./team');
+import fs from 'node:fs';
+import path from 'node:path';
+import { matchLive, herdr, isRecord } from './herdr';
+import { gitInfo, repoDbFile, openDbFile, listRepoDbFiles, humanName } from './db';
+import { postToChat, teamAgents, sendMessage, nameTaken, sanitizeName } from './team';
+import { taskLabel, buildBrief, spawnAgent, setRole } from './commands';
+import { toMs } from './util';
+import * as T from './tui';
+import type {
+  AgentRow, ChatterDb, CountRow, LastReadRow, MessageRow, NameRow, NoteRow,
+  TaskRow, TuiKey,
+} from './types';
 
 // Colored identity for TUI rows: dim display label, colored @handle.
-function identityColored(name, role) {
+function identityColored(name: string, role: string | null | undefined): string {
   const label = (role || '').trim();
   if (!label || sanitizeName(label) === name) return `${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
   return `${T.FAINT}${label}${T.RESET} · ${T.fg(T.authorHue(name))}@${name}${T.RESET}`;
 }
-const padVis = (s, w) => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
-const { toMs } = require('./util');
-const T = require('./tui');
+const padVis = (s: string, w: number): string => s + ' '.repeat(Math.max(1, w - T.visWidth(s)));
 
 // ------------------------------------------------------------ repo selection
 
-function initialDbFile() {
+function initialDbFile(): string | null {
   // The focused workspace's repo wins — and if its universe doesn't exist
   // yet, create it (empty) rather than silently showing another repo's chat.
   try {
-    const ctx = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || '{}');
-    const cwd = (ctx.worktree && ctx.worktree.checkout_path) || ctx.workspace_cwd || ctx.focused_pane_cwd;
+    const parsed: unknown = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || '{}');
+    const ctx = isRecord(parsed) ? parsed : {};
+    const worktree = isRecord(ctx.worktree) ? ctx.worktree : null;
+    const cwd = typeof worktree?.checkout_path === 'string' ? worktree.checkout_path
+      : typeof ctx.workspace_cwd === 'string' ? ctx.workspace_cwd
+      : typeof ctx.focused_pane_cwd === 'string' ? ctx.focused_pane_cwd : null;
     if (cwd) {
       const g = gitInfo(cwd);
       if (g.repoRoot) {
@@ -46,16 +53,16 @@ function initialDbFile() {
   return null;
 }
 
-const repoLabel = (file) => path.basename(path.dirname(file)).replace(/-[0-9a-f]{8}$/, '');
+const repoLabel = (file: string): string => path.basename(path.dirname(file)).replace(/-[0-9a-f]{8}$/, '');
 
 // ------------------------------------------------------------------- helpers
 
-const pad2 = (n) => String(n).padStart(2, '0');
-const localHM = (ts) => { const d = new Date(toMs(ts)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
-const localDay = (ts) => new Date(toMs(ts)).toDateString().slice(0, 10);
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+const localHM = (ts: string): string => { const d = new Date(toMs(ts)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+const localDay = (ts: string): string => new Date(toMs(ts)).toDateString().slice(0, 10);
 
-function highlightMentions(line, human) {
-  return line.replace(/@([a-z0-9_-]+)/g, (_, n) =>
+function highlightMentions(line: string, human: string): string {
+  return line.replace(/@([a-z0-9_-]+)/g, (_match: string, n: string) =>
     (n === human || n === 'everyone')
       ? `${T.INV}@${n}${T.RESET}`
       : `${T.fg(T.authorHue(n))}${T.BOLD}@${n}${T.RESET}`);
@@ -64,8 +71,8 @@ function highlightMentions(line, human) {
 // The numbered universe tabs are only drawn where the number keys actually
 // switch repos — the board. In the chat view digits are typing, so tabs there
 // would look addressable without being addressable.
-function headerBar(file, width, files = null) {
-  const active = (f) => f === file;
+export function headerBar(file: string, width: number, files: readonly string[] | null = null): string {
+  const active = (f: string): boolean => f === file;
   const tabs = files && files.length > 1
     ? files.map((f, i) => active(f) ? `${T.BOLD}[${i + 1} ${repoLabel(f)}]${T.RESET}${T.bg(236)}` : `[${i + 1} ${repoLabel(f)}]`).join(' ')
     : '';
@@ -80,20 +87,22 @@ function headerBar(file, width, files = null) {
 // The human's window is omniscient: channel posts plus ALL direct traffic,
 // including agent-to-agent DMs. Mention rows are per-recipient copies of a
 // channel post, so they're skipped (the post itself shows).
-function feedRows(d) {
-  return d.prepare(`SELECT * FROM messages
+function feedRows(d: ChatterDb): MessageRow[] {
+  return d.prepare<MessageRow>(`SELECT * FROM messages
     WHERE to_agent = '#chat' OR kind != 'mention'
     ORDER BY id DESC LIMIT 500`).all().reverse();
 }
 
-function buildFeedLines(rows, width, human, openPointer) {
-  const lines = [];
+function buildFeedLines(rows: readonly MessageRow[], width: number, human: string, openPointer: number): string[] {
+  const lines: string[] = [];
   const bodyW = Math.max(20, width - 8);
-  const center = (label, color) => {
+  const center = (label: string, color: string): void => {
     const t = `── ${label} ──`;
     lines.push(' '.repeat(Math.max(0, Math.floor((width - t.length) / 2))) + color + t + T.RESET);
   };
-  let prev = null, prevDay = null, marker = false;
+  let prev: MessageRow | null = null;
+  let prevDay: string | null = null;
+  let marker = false;
   for (const m of rows) {
     const day = localDay(m.created_at);
     if (day !== prevDay) { if (lines.length) lines.push(''); center(day, T.FAINT); prevDay = day; prev = null; }
@@ -119,7 +128,7 @@ function buildFeedLines(rows, width, human, openPointer) {
       lines.push(head);
     }
     const prefix = isDM ? `    ${T.fg(T.authorHue(m.from_agent))}│${T.RESET} ` : '    ';
-    const style = (isDM && !mine) ? (l) => `${T.CHROME}${l}${T.RESET}` : (l) => highlightMentions(l, human);
+    const style = (isDM && !mine) ? (l: string) => `${T.CHROME}${l}${T.RESET}` : (l: string) => highlightMentions(l, human);
     for (const l of T.wrap(T.clean(m.body), bodyW)) lines.push(prefix + style(l));
     prev = m;
   }
@@ -133,27 +142,70 @@ function buildFeedLines(rows, width, human, openPointer) {
 const WZ = {
   HANDLE: 'handle', KIND: 'kind', SETUP: 'setup', BRANCH: 'branch', PURPOSE: 'purpose',
   MORE: 'more', CONFIRM: 'confirm', RUN: 'run', KICKOFF: 'kickoff', DONE: 'done',
-};
+} as const;
+type WizardStep = typeof WZ[keyof typeof WZ];
+type WizardMode = 'team' | 'spawn';
+
+interface SpawnDraft {
+  handle: string;
+  kind: string;
+  tab: boolean;
+  branch: string;
+  purpose: string;
+  created?: boolean;
+  display?: string;
+}
+
+interface WizardReport { ok: boolean; text: string }
+interface WizardState {
+  mode: WizardMode;
+  kinds: string[];
+  step: WizardStep;
+  roster: SpawnDraft[];
+  progress: string[];
+  report: WizardReport[];
+  draft: SpawnDraft;
+  typed: string;
+}
+
+interface PrivateBlock { title: string; lines: string[] }
+interface BriefResult { since: string; lines: string[] }
+interface UiState {
+  buffer: string;
+  status: string;
+  names: string[];
+  roles?: Map<string, string>;
+  offset: number;
+  maxOffset: number;
+  openPointer: number;
+  lastMaxId: number;
+  scrollBaseId: number;
+  wizard: WizardState | null;
+  block?: PrivateBlock | null;
+  pendingSpawn?: { name: string; kind: string | null; purpose: string | null; tab: boolean } | null;
+  lastBrief?: BriefResult;
+}
+
 const KIND_FALLBACK = ['claude', 'codex', 'pi', 'opencode', 'gemini', 'cursor'];
 
 // Herdr owns the list of kinds it can start — ask it, and only fall back when
 // the CLI is unreachable or its help format moves.
-function supportedKinds() {
+function supportedKinds(): string[] {
   const m = (herdr(['agent', 'start', '--help']).raw || '').match(/possible values:\s*([^\]]+)\]/);
-  const kinds = m ? m[1].split(',').map((s) => s.trim()).filter((s) => /^[a-z][a-z0-9-]*$/.test(s)) : [];
+  const kinds = m?.[1] ? m[1].split(',').map((s) => s.trim()).filter((s) => /^[a-z][a-z0-9-]*$/.test(s)) : [];
   return kinds.length ? kinds : KIND_FALLBACK;
 }
 
 // Preselect what this repo already runs — a team tends to be one kind.
-function majorityKind(d, kinds) {
-  const seen = teamAgents(d).map((a) => a.agent).filter((k) => kinds.includes(k));
+function majorityKind(d: ChatterDb, kinds: readonly string[]): string {
+  const seen = teamAgents(d).map((a) => a.agent).filter((kind): kind is string => !!kind && kinds.includes(kind));
   const best = seen.sort((a, b) => seen.filter((k) => k === b).length - seen.filter((k) => k === a).length)[0];
-  return best || (kinds.includes('claude') ? 'claude' : kinds[0]);
+  return best || (kinds.includes('claude') ? 'claude' : kinds[0] ?? 'claude');
 }
 
-const newDraft = (kind) => ({ handle: '', kind, tab: false, branch: '', purpose: '' });
+const newDraft = (kind: string): SpawnDraft => ({ handle: '', kind, tab: false, branch: '', purpose: '' });
 
-function startWizard(d, ui, mode) {
+function startWizard(d: ChatterDb, ui: UiState, mode: WizardMode): void {
   const kinds = supportedKinds();
   ui.block = null; ui.buffer = ''; ui.status = '';
   ui.wizard = {
@@ -163,7 +215,7 @@ function startWizard(d, ui, mode) {
 }
 
 // The same four facts the /spawn-with-args plan card shows.
-function planLines(p) {
+function planLines(p: SpawnDraft): string[] {
   return [
     `handle:      @${p.handle}`,
     `kind:        ${p.kind}`,
@@ -174,7 +226,7 @@ function planLines(p) {
 
 // Live collision check: the same answer `chatter spawn` would give, plus the
 // names this plan is about to claim.
-function handleError(w) {
+function handleError(w: WizardState): string {
   const p = w.draft;
   if (!p.handle) return 'handle required';
   if (w.roster.some((r) => r.handle === p.handle)) return `"${p.handle}" is already in this plan`;
@@ -182,10 +234,11 @@ function handleError(w) {
   return taken ? `"${p.handle}" is ${taken} — pick another` : '';
 }
 
-function renderWizard(d, file, files, ui) {
+function renderWizard(_d: ChatterDb, file: string, _files: readonly string[], ui: UiState): string[] {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const w = ui.wizard;
+  if (!w) return [];
   const p = w.draft;
   const out = [headerBar(file, width), ''];
   const planned = w.mode === 'team' && w.roster.length ? `  ${T.FAINT}${w.roster.length} planned${T.RESET}` : '';
@@ -211,7 +264,7 @@ function renderWizard(d, file, files, ui) {
     out.push('', T.hint('← → picks a kind', 'Enter continues', cancels));
   } else if (w.step === WZ.SETUP) {
     out.push('   code setup');
-    const mark = (on, label) => (on ? `${T.GREEN}●${T.RESET} ${label}` : `${T.FAINT}○ ${label}${T.RESET}`);
+    const mark = (on: boolean, label: string): string => (on ? `${T.GREEN}●${T.RESET} ${label}` : `${T.FAINT}○ ${label}${T.RESET}`);
     out.push(`   ${mark(!p.tab, 'new worktree')}    ${mark(p.tab, 'same checkout, new tab')}`);
     out.push(`   ${T.FAINT}worktree = isolated checkout · tab = shared files, coordinate carefully${T.RESET}`);
     out.push('', T.hint('← → toggles', 'Enter continues', cancels));
@@ -255,15 +308,16 @@ function renderWizard(d, file, files, ui) {
   return out.slice(0, height);
 }
 
-const reportLine = (r) => (r.ok
+const reportLine = (r: WizardReport): string => (r.ok
   ? `   ${T.GREEN}✓${T.RESET}  ${T.clean(r.text)}`
   : `   ${T.NEWMARK}✗${T.RESET}  ${T.clean(r.text)}`);
 
 // Create every planned teammate serially, narrating each stage into the
 // progress list. Blocking by design — the screen keeps up because each
 // stage repaints before the next subprocess call.
-function runWizardSpawns(d, ui, paint) {
+function runWizardSpawns(d: ChatterDb, ui: UiState, paint: () => void): void {
   const w = ui.wizard;
+  if (!w) return;
   const me = { name: humanName(), human: true };
   const plans = w.mode === 'team' ? w.roster : [w.draft];
   w.step = WZ.RUN; w.progress = []; w.report = [];
@@ -279,7 +333,7 @@ function runWizardSpawns(d, ui, paint) {
       purpose: w.mode === 'team' ? null : (p.purpose || null),
       tab: p.tab,
       branch: p.tab ? null : (p.branch || null),
-    }, d, (line) => { w.progress.push(`     ${T.FAINT}${line}${T.RESET}`); paint(); });
+    }, d, (line: string) => { w.progress.push(`     ${T.FAINT}${line}${T.RESET}`); paint(); });
     p.created = r.ok;
     // A spawn can succeed and still carry a caveat — don't tick a warning.
     for (const l of r.lines) w.report.push({ ok: r.ok && !/^warning:/.test(l), text: l });
@@ -290,8 +344,9 @@ function runWizardSpawns(d, ui, paint) {
 
 // Deliver the purposes the planning step deliberately withheld, then one
 // roster brief so the whole team sees who is on it.
-function kickoff(d, ui) {
+function kickoff(d: ChatterDb, ui: UiState): void {
   const w = ui.wizard;
+  if (!w) return;
   const me = { name: humanName(), human: true };
   const made = w.roster.filter((p) => p.created);
   if (!made.length) { w.report.push({ ok: false, text: 'nothing was created — nothing to kick off' }); return; }
@@ -309,8 +364,9 @@ function kickoff(d, ui) {
 
 // One raw key, routed by step. Text fields edit their value directly; the
 // confirm card keeps the "empty Enter = yes, typing = no" contract.
-function wizardKey(key, d, ui, paint) {
+function wizardKey(key: TuiKey, d: ChatterDb, ui: UiState, paint: () => void): void {
   const w = ui.wizard;
+  if (!w) return;
   const p = w.draft;
   const done = () => { ui.wizard = null; ui.buffer = ''; };
   if (key.type === 'esc') {
@@ -318,9 +374,12 @@ function wizardKey(key, d, ui, paint) {
     ui.status = `${T.FAINT}${w.mode === 'team' ? 'team' : 'spawn'} wizard cancelled${T.RESET}`;
     return paint();
   }
-  const edit = (val, filter) => key.type === 'backspace' ? val.slice(0, -1)
+  const edit = (val: string, filter?: RegExp) => key.type === 'backspace' ? val.slice(0, -1)
     : key.type === 'text' ? val + (filter ? key.text.replace(filter, '') : key.text) : val;
-  const cycle = (delta) => { w.kinds.length && (p.kind = w.kinds[(w.kinds.indexOf(p.kind) + delta + w.kinds.length) % w.kinds.length]); };
+  const cycle = (delta: number): void => {
+    const next = w.kinds[(w.kinds.indexOf(p.kind) + delta + w.kinds.length) % w.kinds.length];
+    if (next) p.kind = next;
+  };
   switch (w.step) {
     case WZ.HANDLE:
       p.handle = edit(p.handle, /[^a-z0-9_-]/g);
@@ -374,13 +433,13 @@ function wizardKey(key, d, ui, paint) {
   return paint();
 }
 
-function renderChat(d, file, files, ui) {
+function renderChat(d: ChatterDb, file: string, files: readonly string[], ui: UiState): string[] {
   if (ui.wizard) return renderWizard(d, file, files, ui);
   return renderFeed(d, file, files, ui);
 }
 
 // Nothing said yet: the wordmark plus the three things worth knowing.
-function welcomeLines(width, feedH) {
+function welcomeLines(width: number, feedH: number): string[] {
   const logo = feedH >= T.logoLines(width).length + 3 ? T.logoLines(width) : [];
   const parts = ["this repo's team is empty", '/spawn adds a teammate', '@name pushes', '/help lists commands'];
   const one = T.hint(...parts);
@@ -389,12 +448,12 @@ function welcomeLines(width, feedH) {
   return ['', ...logo, ...rows];
 }
 
-function renderFeed(d, file, files, ui) {
+function renderFeed(d: ChatterDb, file: string, _files: readonly string[], ui: UiState): string[] {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const human = humanName();
   const rows = feedRows(d);
-  ui.lastMaxId = rows.length ? rows[rows.length - 1].id : 0;
+  ui.lastMaxId = rows.at(-1)?.id ?? 0;
 
   // Seeing the latest IS reading — but only while pinned to the bottom.
   if (ui.offset === 0) {
@@ -411,7 +470,7 @@ function renderFeed(d, file, files, ui) {
   // borrows rows from the feed. Never stored, never posted.
   const block = ui.block
     ? [`  ${T.FAINT}┌ ${ui.block.title} — only you (/clear dismisses)${T.RESET}`,
-       ...ui.block.lines.map((l) => `  ${T.FAINT}│${T.RESET} ${l}`)]
+       ...ui.block.lines.map((l: string) => `  ${T.FAINT}│${T.RESET} ${l}`)]
     : [];
   const feedH = Math.max(3, height - 4 - block.length);
   const all = rows.length ? buildFeedLines(rows, width, human, ui.openPointer) : welcomeLines(width, feedH);
@@ -438,7 +497,8 @@ function renderFeed(d, file, files, ui) {
     : `${prompt}${cursor}${T.FAINT} Message #${repoLabel(file)} — @name pushes${T.RESET}`;
 
   const mention = ui.buffer.match(/@([a-z0-9_-]*)$/);
-  const hits = mention ? ui.names.filter((n) => n.startsWith(mention[1])) : [];
+  const mentionPrefix = mention?.[1] ?? '';
+  const hits = mention ? ui.names.filter((n) => n.startsWith(mentionPrefix)) : [];
   const bottom = hits.length
     ? `   ${hits.map((n) => {
       const role = (ui.roles && ui.roles.get(n)) || '';
@@ -456,7 +516,7 @@ function renderFeed(d, file, files, ui) {
 
 // Slash commands typed in the chat input. Results are private (ui.block).
 // `paint` lets long-running commands show progress before blocking.
-function runSlash(body, d, ui, paint) {
+function runSlash(body: string, d: ChatterDb, ui: UiState, _paint: () => void): void {
   const [cmd, ...rest] = body.slice(1).split(/\s+/);
   if (cmd === 'clear') { ui.block = null; return; }
   if (cmd === 'team') { startWizard(d, ui, 'team'); return; }
@@ -499,7 +559,7 @@ function runSlash(body, d, ui, paint) {
       const b = buildBrief({ name: humanName(), human: true }, d, rest[0] || null);
       ui.lastBrief = b;
       ui.block = { title: `brief · since ${b.since}`, lines: [...b.lines, '', `${T.FAINT}/brief share posts this to #chat${T.RESET}`] };
-    } catch (e) { ui.block = { title: 'brief', lines: [String(e.message)] }; }
+    } catch (e) { ui.block = { title: 'brief', lines: [e instanceof Error ? e.message : String(e)] }; }
     return;
   }
   ui.block = { title: 'commands', lines: [
@@ -513,24 +573,24 @@ function runSlash(body, d, ui, paint) {
 
 // -------------------------------------------------------------------- board
 
-function renderBoard(d, file, files) {
+function renderBoard(d: ChatterDb, file: string, files: readonly string[]): string[] {
   const width = process.stdout.columns || 100;
   const height = process.stdout.rows || 30;
   const live = teamAgents(d, { fresh: true });
-  const agents = d.prepare('SELECT * FROM agents WHERE departed_at IS NULL ORDER BY name').all();
-  const tasks = d.prepare("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id LIMIT 8").all();
-  const notes = d.prepare("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 6").all();
-  const msgs = d.prepare("SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC LIMIT 10").all().reverse();
-  const taskBy = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress').map((t) => [t.assignee, t]));
-  const openQ = d.prepare("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get().n;
-  const dot = { idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK, unknown: T.FAINT, offline: T.FAINT };
+  const agents = d.prepare<AgentRow>('SELECT * FROM agents WHERE departed_at IS NULL ORDER BY name').all();
+  const tasks = d.prepare<TaskRow>("SELECT * FROM tasks ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, id LIMIT 8").all();
+  const notes = d.prepare<NoteRow>("SELECT * FROM notes WHERE status = 'active' ORDER BY id DESC LIMIT 6").all();
+  const msgs = d.prepare<MessageRow>("SELECT * FROM messages WHERE to_agent = '#chat' ORDER BY id DESC LIMIT 10").all().reverse();
+  const taskBy: Record<string, TaskRow> = Object.fromEntries(tasks.filter((t) => t.status === 'in_progress' && t.assignee).map((t) => [t.assignee, t]));
+  const openQ = d.prepare<CountRow>("SELECT COUNT(*) AS n FROM notes WHERE type = 'question' AND status = 'active'").get()?.n ?? 0;
+  const dot: Record<string, string> = { idle: T.GREEN, done: T.GREEN, working: T.YELLOW, blocked: T.NEWMARK, unknown: T.FAINT, offline: T.FAINT };
   const out = [headerBar(file, width, files)];
   if (openQ) out.push(` ${T.YELLOW}${openQ} open question${openQ > 1 ? 's' : ''}${T.RESET}`);
   out.push('', ` ${T.BOLD}Agents${T.RESET}`);
   if (!agents.length) out.push(`   ${T.FAINT}(none registered yet)${T.RESET}`);
   for (const a of agents) {
     const l = matchLive(live, a);
-    const st = l ? l.agent_status : 'offline';
+    const st = l?.agent_status ?? 'offline';
     const t = taskBy[a.name];
     out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(identityColored(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
   }
@@ -549,26 +609,27 @@ function renderBoard(d, file, files) {
 
 // ----------------------------------------------------------------- run loop
 
-function viewMentionResolver(d) {
-  return (input) => {
-    const names = new Set(d.prepare('SELECT name FROM agents').all().map((r) => r.name));
+function viewMentionResolver(d: ChatterDb): (input: string) => string | null {
+  return (input: string) => {
+    const names = new Set(d.prepare<NameRow>('SELECT name FROM agents').all().map((r) => r.name));
     for (const a of teamAgents(d)) if (a.name) names.add(a.name);
     if (names.has(input)) return input;
     const hits = [...names].filter((n) => n.startsWith(input));
-    return hits.length === 1 ? hits[0] : null;
+    return hits.length === 1 ? hits[0] ?? null : null;
   };
 }
 
-function openPointerFor(d) {
-  const row = d.prepare('SELECT last_read_id FROM chat_reads WHERE agent = ?').get(humanName());
+function openPointerFor(d: ChatterDb): number {
+  const row = d.prepare<LastReadRow>('SELECT last_read_id FROM chat_reads WHERE agent = ?').get(humanName());
   return (row && row.last_read_id) || 0;
 }
 
-function runView(render, { input = false } = {}) {
+type ViewRenderer = (d: ChatterDb, file: string, files: readonly string[], ui: UiState) => string[];
+function runView(render: ViewRenderer, { input = false }: { input?: boolean } = {}): void {
   let files = listRepoDbFiles();
   let file = initialDbFile();
   let d = file ? openDbFile(file) : null;
-  const ui = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0, wizard: null };
+  const ui: UiState = { buffer: '', status: '', names: [], offset: 0, maxOffset: 0, openPointer: d ? openPointerFor(d) : 0, lastMaxId: 0, scrollBaseId: 0, wizard: null };
   // Pane entrypoints in tab/split mode get HERDR_PANE_ID; the popup does not.
   // A pane the human placed on purpose must not vanish on a stray Esc.
   const persistent = input && !!process.env.HERDR_PANE_ID;
@@ -584,18 +645,18 @@ function runView(render, { input = false } = {}) {
   ];
   const paint = () => {
     files = listRepoDbFiles();
-    if (!d) { painter(pickerScreen()); return; }
+    if (!d || !file) { painter(pickerScreen()); return; }
     if (input) {
-      const rows = d.prepare('SELECT name, role FROM agents WHERE departed_at IS NULL').all();
+      const rows = d.prepare<Pick<AgentRow, 'name' | 'role'>>('SELECT name, role FROM agents WHERE departed_at IS NULL').all();
       const set = new Set(rows.map((r) => r.name));
-      ui.roles = new Map(rows.filter((r) => r.role).map((r) => [r.name, r.role]));
+      ui.roles = new Map(rows.flatMap((r) => r.role ? [[r.name, r.role] as const] : []));
       for (const a of teamAgents(d, { fresh: true })) if (a.name) set.add(a.name);
       ui.names = [...set].sort();
     }
     painter(render(d, file, files, ui));
   };
   const painter = T.makePainter();
-  const scroll = (delta) => {
+  const scroll = (delta: number): void => {
     if (ui.offset === 0 && delta > 0) ui.scrollBaseId = ui.lastMaxId;
     ui.offset = Math.max(0, Math.min(ui.maxOffset, ui.offset + delta));
     paint();
@@ -603,7 +664,7 @@ function runView(render, { input = false } = {}) {
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    process.stdin.on('data', (b) => {
+    process.stdin.on('data', (b: Buffer) => {
       const key = T.decodeKey(b.toString());
       if (key.type === 'close') process.exit(0); // ctrl+c always closes
       if (key.type === 'esc') {
@@ -624,7 +685,8 @@ function runView(render, { input = false } = {}) {
           if (key.text === 'q') process.exit(0);
           const n = parseInt(key.text, 10);
           if (n >= 1 && n <= files.length) {
-            file = files[n - 1]; d = openDbFile(file); ui.openPointer = openPointerFor(d); paint();
+            const selected = files[n - 1];
+            if (selected) { file = selected; d = openDbFile(selected); ui.openPointer = openPointerFor(d); paint(); }
           }
         }
         return;
@@ -637,7 +699,8 @@ function runView(render, { input = false } = {}) {
           if (key.text === 'q') process.exit(0);
           const n = parseInt(key.text, 10);
           if (n >= 1 && n <= files.length && files[n - 1] !== file) {
-            file = files[n - 1]; d = openDbFile(file); ui.openPointer = openPointerFor(d); paint();
+            const selected = files[n - 1];
+            if (selected) { file = selected; d = openDbFile(selected); ui.openPointer = openPointerFor(d); paint(); }
           }
         }
         return;
@@ -658,7 +721,7 @@ function runView(render, { input = false } = {}) {
               ui.block = { title: `creating @${plan.name}`, lines: [] };
               paint();
               const r = spawnAgent({ name: humanName(), human: true }, plan, d, (line) => {
-                ui.block.lines.push(`${T.FAINT}${line}${T.RESET}`);
+                ui.block?.lines.push(`${T.FAINT}${line}${T.RESET}`);
                 paint();
               });
               ui.block = { title: r.ok ? 'teammate added' : 'spawn failed', lines: r.lines };
@@ -680,8 +743,9 @@ function runView(render, { input = false } = {}) {
         case 'tab': {
           const m = ui.buffer.match(/@([a-z0-9_-]*)$/);
           if (m) {
-            const hits = ui.names.filter((n) => n.startsWith(m[1]));
-            if (hits.length) ui.buffer = ui.buffer.slice(0, ui.buffer.length - m[1].length) + hits[0] + ' ';
+            const prefix = m[1] ?? '';
+            const hits = ui.names.filter((n) => n.startsWith(prefix));
+            if (hits[0]) ui.buffer = ui.buffer.slice(0, ui.buffer.length - prefix.length) + hits[0] + ' ';
           }
           return paint();
         }
@@ -696,7 +760,5 @@ function runView(render, { input = false } = {}) {
   setInterval(paint, 2000);
 }
 
-const cmdBoard = () => runView(renderBoard);
-const cmdChatView = () => runView(renderChat, { input: true });
-
-module.exports = { cmdBoard, cmdChatView, headerBar };  // headerBar: exported for tests
+export const cmdBoard = (): void => runView(renderBoard);
+export const cmdChatView = (): void => runView(renderChat, { input: true });

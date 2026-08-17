@@ -1,4 +1,13 @@
 'use strict';
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.registration = registration;
+exports.manifestVersion = manifestVersion;
+exports.updateStatus = updateStatus;
+exports.runUpdate = runUpdate;
+exports.cmdUpdate = cmdUpdate;
 // Keeping this machine's copy of chatter current.
 //
 // Herdr installs plugins two ways and the registry remembers which: a GitHub
@@ -7,14 +16,16 @@
 //
 // Nothing here touches your data: config, names and the per-repo universes all
 // live outside the checkout, so an upgrade never sees them.
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { PLUGIN_ID, herdr } = require('./herdr');
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_child_process_1 = require("node:child_process");
+const herdr_1 = require("./herdr");
+const commands_1 = require("./commands");
+const util_1 = require("./util");
 // git as an argv array, never a shell. Network calls pass a timeout so a
 // dead remote can't hang a terminal.
 function git(args, { cwd = null, timeout = 0 } = {}) {
-    const r = spawnSync('git', args, {
+    const r = (0, node_child_process_1.spawnSync)('git', args, {
         cwd: cwd || undefined,
         encoding: 'utf8',
         timeout: timeout || undefined,
@@ -26,16 +37,24 @@ function git(args, { cwd = null, timeout = 0 } = {}) {
 }
 // The registry is the truth about how this machine got the plugin.
 function registration() {
-    const r = herdr(['plugin', 'list', '--json']);
-    if (!r.ok || !r.json || !r.json.result)
+    const r = (0, herdr_1.herdr)(['plugin', 'list', '--json']);
+    if (!r.ok || !(0, herdr_1.isRecord)(r.json) || !(0, herdr_1.isRecord)(r.json.result) || !Array.isArray(r.json.result.plugins))
         return null;
-    return (r.json.result.plugins || []).find((p) => p.plugin_id === PLUGIN_ID) || null;
+    const plugin = r.json.result.plugins.find((item) => (0, herdr_1.isRecord)(item) && item.plugin_id === herdr_1.PLUGIN_ID);
+    if (!(0, herdr_1.isRecord)(plugin) || typeof plugin.plugin_id !== 'string' || typeof plugin.plugin_root !== 'string' || !(0, herdr_1.isRecord)(plugin.source))
+        return null;
+    return {
+        plugin_id: plugin.plugin_id,
+        plugin_root: plugin.plugin_root,
+        version: typeof plugin.version === 'string' ? plugin.version : undefined,
+        source: Object.fromEntries(Object.entries(plugin.source).filter((entry) => typeof entry[1] === 'string')),
+    };
 }
 function manifestVersion(root) {
     try {
-        const text = fs.readFileSync(path.join(root, 'herdr-plugin.toml'), 'utf8');
+        const text = node_fs_1.default.readFileSync(node_path_1.default.join(root, 'herdr-plugin.toml'), 'utf8');
         const m = text.match(/^\s*version\s*=\s*"([^"]+)"/m);
-        return m ? m[1] : null;
+        return m?.[1] ?? null;
     }
     catch {
         return null;
@@ -114,7 +133,7 @@ function runUpdate({ source, root }, { check = false } = {}) {
         // A pinned ref stays pinned — an update must not silently unpin someone.
         if (src.requested_ref)
             args.push('--ref', src.requested_ref);
-        const r = herdr(args);
+        const r = (0, herdr_1.herdr)(args);
         if (!r.ok)
             return fail(`reinstall failed: ${r.raw}`, 'if that was a network error, try again when you are online');
         lines.push(`reinstalled ${spec} from GitHub${src.requested_ref ? ` (ref ${src.requested_ref})` : ''}`);
@@ -136,25 +155,23 @@ function runUpdate({ source, root }, { check = false } = {}) {
             return fail(`git pull --ff-only failed: ${(pull.raw || '').split('\n')[0]}`, 'a refused fast-forward means this checkout has diverged from its remote — reconcile it by hand');
         }
         lines.push(/Already up to date|Already up-to-date/.test(pull.out) ? 'checkout already current' : 'fast-forwarded the checkout');
-        const link = herdr(['plugin', 'link', root]);
+        const link = (0, herdr_1.herdr)(['plugin', 'link', root]);
         lines.push(link.ok ? 'manifest re-registered with Herdr' : `manifest re-register failed: ${link.raw}`);
     }
     const after = manifestVersion(rootAfter);
     if (before && after)
         lines.push(before === after ? `already up to date (v${before})` : `v${before} → v${after}`);
     // A new checkout means a new CLI target: refresh the symlink either way.
-    require('./commands').ensurePointerAndSymlink();
+    (0, commands_1.ensurePointerAndSymlink)();
     lines.push('verify with: chatter doctor');
     return { ok: true, lines };
 }
 function cmdUpdate(me, args) {
-    const { humanOnly } = require('./commands');
-    const { die, parseFlags } = require('./util');
-    humanOnly(me, 'chatter update');
-    const opts = parseFlags(args, { check: false });
+    (0, commands_1.humanOnly)(me, 'chatter update');
+    const opts = (0, util_1.parseFlags)(args, { check: false });
     const reg = registration();
     if (!reg) {
-        die('chatter is not registered with Herdr — install it (herdr plugin install <owner>/<repo>)\n'
+        (0, util_1.die)('chatter is not registered with Herdr — install it (herdr plugin install <owner>/<repo>)\n'
             + 'or link this checkout (herdr plugin link <path>)');
     }
     const r = runUpdate({ source: reg.source, root: reg.plugin_root }, { check: opts.check });
@@ -163,4 +180,3 @@ function cmdUpdate(me, args) {
     if (!r.ok)
         process.exit(1);
 }
-module.exports = { cmdUpdate, runUpdate, updateStatus, registration, manifestVersion };
