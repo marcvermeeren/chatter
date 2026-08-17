@@ -60,7 +60,7 @@ assertSame('manifest events', sectionFields('events', 'on'), expectedEvents);
 assertSame('manifest panes', sectionFields('panes', 'id'), expectedPanes);
 assertSame('manifest startup count', manifest.split('[[startup]]').slice(1).map(() => 'startup'), ['startup']);
 
-const help = execFileSync(process.execPath, ['--no-warnings', '--experimental-sqlite', entry, 'help'], {
+const help = execFileSync(process.execPath, ['--no-warnings', '--experimental-sqlite', entry, 'help', '--all'], {
   cwd: root,
   encoding: 'utf8',
   env: {

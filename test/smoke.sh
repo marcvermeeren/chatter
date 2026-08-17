@@ -45,8 +45,22 @@ UNKNOWN_STDOUT="$TMP/unknown.stdout"; UNKNOWN_STDERR="$TMP/unknown.stderr"
 $CH definitely-not-a-command >"$UNKNOWN_STDOUT" 2>"$UNKNOWN_STDERR"; UNKNOWN_RC=$?
 [ "$UNKNOWN_RC" = "1" ] && [ ! -s "$UNKNOWN_STDOUT" ] && grep -q 'unknown command' "$UNKNOWN_STDERR" \
   && ok "unknown command exits 1 on stderr only" || fail "unknown command exit/stream contract"
-$CH -h | grep -q "chatter agents" && $CH --help | grep -q "chatter agents" \
-  && ok "help aliases preserve the public help" || fail "help aliases preserve the public help"
+HELP=$($CH help)
+[ "$HELP" = "$($CH -h)" ] && [ "$HELP" = "$($CH --help)" ] \
+  && ok "help aliases preserve concise help" || fail "help aliases preserve concise help"
+HELP_ALL=$($CH help --all)
+[ "$HELP_ALL" = "$($CH -h --all)" ] && [ "$HELP_ALL" = "$($CH --help --all)" ] \
+  && ok "help aliases preserve full help" || fail "help aliases preserve full help"
+[ "$(printf '%s\n' "$HELP" | wc -l | tr -d ' ')" -le 30 ] && echo "$HELP" | grep -q "chatter help --all" \
+  && ok "concise help stays short and points to full help" || fail "concise help size or pointer"
+echo "$HELP" | grep -q "chatter purge" && fail "concise help includes maintenance noise" \
+  || ok "concise help omits maintenance noise"
+printf '%s\n%s\n' "$HELP" "$HELP_ALL" | grep -Eq 'chatter\.db|tables: agents' \
+  && fail "help exposes SQLite internals" || ok "help keeps SQLite internal"
+HELP_BAD_STDOUT="$TMP/help-bad.stdout"; HELP_BAD_STDERR="$TMP/help-bad.stderr"
+$CH help task >"$HELP_BAD_STDOUT" 2>"$HELP_BAD_STDERR"; HELP_BAD_RC=$?
+[ "$HELP_BAD_RC" = "1" ] && [ ! -s "$HELP_BAD_STDOUT" ] && grep -q 'usage: chatter help \[--all\]' "$HELP_BAD_STDERR" \
+  && ok "invalid help arguments fail on stderr" || fail "invalid help argument contract"
 
 echo "# inbox + note lifecycle"
 BASIC_DB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)
@@ -472,7 +486,7 @@ AG_OUT=$(HERDR_PANE_ID=w1:p1 $UPDCLI node --no-warnings --experimental-sqlite "$
 echo "$AG_OUT" | grep -q "human-only" && ok "agents cannot update the plugin" || fail "agent update not blocked: $AG_OUT"
 $UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" doctor 2>&1 | grep -q "chatter is up to date" \
   && ok "doctor reports update state as a note" || fail "doctor reports update state"
-$UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" help | grep -q "chatter update" \
+$UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" help --all | grep -q "chatter update" \
   && ok "help documents update" || fail "help documents update"
 
 echo "# setup --yes + doctor"
@@ -531,8 +545,8 @@ HOME="$CONFHOME" $CH doctor 2>&1 | grep -q "✗.*chat tab keybinding" \
   && fail "missing tab binding rendered as a failure" || ok "missing tab binding is hint-level, not a failure"
 
 echo "# help documents how to open the chat"
-$CH help | grep -q "chatter.open-chat-tab" && ok "help names the tab action" || fail "help names the tab action"
-$CH help | grep -q "placement split" && ok "help names --placement split" || fail "help names --placement split"
+$CH help --all | grep -q "chatter.open-chat-tab" && ok "full help names the tab action" || fail "full help names the tab action"
+$CH help --all | grep -q "placement split" && ok "full help names --placement split" || fail "full help names --placement split"
 $CH help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
 $CH help | grep -q "prefix+alt+b" && ok "help names the board keybinding" || fail "help names the board keybinding"
 $CH help | grep -q "prefix+alt+shift+b" && ok "help names the board tab keybinding" || fail "help names the board tab keybinding"
