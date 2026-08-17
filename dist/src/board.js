@@ -87,7 +87,19 @@ function viewRepoCwd(explicitRepo, rawContext, fallbackCwd) {
 }
 function initialDbFile() {
     const cwd = viewRepoCwd(process.env.CHATTER_REPO_ROOT, process.env.HERDR_PLUGIN_CONTEXT_JSON, process.cwd());
-    return cwd ? dbFileForCwd(cwd) : null;
+    if (!cwd)
+        return null;
+    const file = dbFileForCwd(cwd);
+    if (!file)
+        return null;
+    // The manifest command is resolved before Node starts, so it is safe to
+    // make the long-running view's cwd truthful after loading. Herdr will then
+    // preserve this repository if another Chatter action is invoked while the
+    // board or chat itself has focus.
+    const worktreeRoot = (0, db_1.gitInfo)(cwd).toplevel;
+    if (worktreeRoot)
+        process.chdir(worktreeRoot);
+    return file;
 }
 const repoLabel = (file) => node_path_1.default.basename(node_path_1.default.dirname(file)).replace(/-[0-9a-f]{8}$/, '');
 // ------------------------------------------------------------------- helpers
