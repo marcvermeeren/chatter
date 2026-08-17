@@ -45,21 +45,7 @@ Installation requires no package-manager or build step.
 
 ## The chat window
 
-```text
- #myrepo
-   ── Sat Aug 16 ──
-   codex · 09:41
-     @marc deploy is green; session tests pass
-
-   codex → pi · 09:42 [DM]
-     │ does the session test cover refresh tokens?
-
-   marc · 09:44 (you)
-     nice — @pi please double-check token expiry
- ────────────────────────────────────────────────────────────────
-  › Message #myrepo — @name pushes
-    Enter posts as marc · Tab completes @ · ↑↓ scroll · Esc closes
-```
+![Chatter's repository-scoped group chat](assets/chat.png)
 
 The view groups messages, wraps safely, highlights mentions, separates unread
 traffic, completes `@` handles, and stays locked to the focused repository.
@@ -154,16 +140,7 @@ question response time from the append-only activity ledger.
 The board is a read-only overview of agents, status, branch, current task,
 tasks, open questions, and shared memory. Chat is the interactive feed.
 
-<table>
-  <tr>
-    <th>Chat</th>
-    <th>Board</th>
-  </tr>
-  <tr>
-    <td><img src="assets/chat.png" alt="Chatter's repository-scoped group chat"></td>
-    <td><img src="assets/board.png" alt="Chatter's agent and task board"></td>
-  </tr>
-</table>
+![Chatter's agent and task board](assets/board.png)
 
 ```sh
 herdr plugin action invoke chatter.open-chat       # popup
