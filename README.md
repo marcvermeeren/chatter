@@ -28,9 +28,12 @@ sessions, a shared scratchpad with dead-ends and open questions, lightweight
 tasks, and structured handoffs. The human is a first-class team member — with
 their own name, an omniscient chat window, and non-intrusive notifications.
 
-Zero dependencies (Node ≥ 22.5, built-in SQLite). One CLI. No skill files, no
-MCP servers, no per-agent setup — agents learn the protocol from the first
-message they receive.
+Zero runtime dependencies (Node ≥ 22.5, built-in SQLite). The committed
+CommonJS build runs directly under Node: users do not need Bun, `npm install`,
+or a build step. The launcher supplies Node 22.5's required
+`--experimental-sqlite` compatibility flag automatically. One CLI, no skill
+files, no MCP servers, no per-agent setup —
+agents learn the protocol from the first message they receive.
 
 ```
 frontend-agent (worktree A)
@@ -70,11 +73,10 @@ quieter). Agents' surfaces stay clean: their inbox is their own mail, their
 `chatter chat` is channel-only. Nothing is cryptographically secret — it's
 one SQLite file on your machine — but default surfaces shape behavior.
 
-**5. The protocol is self-teaching.** Every message injected into an agent's
-session ends with a footer showing how to reply, check the inbox, and find
-unread chat. In testing, fresh Claude Code, Codex, and pi instances each
-learned the protocol from a single received message — and the footer even
-decides etiquette (channel mentions teach channel replies).
+**5. Coordination prompts stay small.** Injected messages carry only the next
+useful action: private replies stay private, channel replies stay public, and
+questions, assignments, and handoffs point directly at their completion
+command. First contact alone points at `chatter help`.
 
 ---
 
@@ -101,10 +103,9 @@ The chat window (`ctrl+b alt+c` once keybound):
 Stable per-author colors, grouped messages with word wrap, date and `── new ──`
 separators, local timestamps, `@mention` highlighting, a fixed input bar with
 `@`-completion (Tab) and post feedback (`✓ pushed to codex`), scrollable
-history, flicker-free rendering. The header names only the repo you're in —
-the chat view never shows numbered universe tabs, because in the chat view
-digits are typing, and a tab you can't press is worse than no tab. An empty
-chat greets you with the wordmark and where to start.
+history, flicker-free rendering. Every view stays with the focused repository
+and names only that repository in its header. An empty chat greets you with
+the wordmark and where to start.
 
 ---
 
@@ -118,9 +119,10 @@ herdr plugin action invoke chatter.setup
 ```
 
 The wizard prefills your name from your OS user, enables toasts and binds
-**two** keys by appending to `~/.config/herdr/config.toml` —
+**four** keys by appending to `~/.config/herdr/config.toml` —
 `prefix+alt+c` opens the chat as a popup, `prefix+alt+t` opens it as a
-persistent tab — with a timestamped backup, respecting any existing
+persistent tab, `prefix+alt+b` opens the board as a popup, and
+`prefix+alt+shift+b` opens the board in a persistent tab — with a timestamped backup, respecting any existing
 `[ui.toast]` section and detecting keybinding conflicts per binding (each key
 is decided on its own: already bound, key taken, or added), then reloads
 Herdr's config so everything is active immediately, symlinks `chatter` into
@@ -130,10 +132,12 @@ Scripting a second machine? Non-interactive:
 
 ```sh
 chatter setup --yes [--name marc] [--key "prefix+alt+c"] [--tab-key "prefix+alt+t"] \
+  [--board-key "prefix+alt+b"] \
+  [--board-tab-key "prefix+alt+shift+b"] \
   [--no-toasts] [--no-keybind]
 ```
 
-`--no-keybind` skips both keys; either key can be pointed somewhere else, and
+`--no-keybind` skips all four keys; each key can be pointed somewhere else, and
 a key already used by something else is skipped with a note rather than
 overwritten.
 
@@ -242,7 +246,9 @@ fields to maintain — purpose lives in names the human already gave.
   open and visible (roster footer, board, `chatter questions`) until someone
   answers; the asker is notified. Closes the "documented the open question,
   never went back to it" gap.
-- `chatter notes [query]` — read/search; `chatter resolve <id>` marks stale.
+- `chatter notes [query] [--task TASK-n]` — read/search, with task memory
+  ranked dead ends, decisions, then discoveries; `chatter resolve <id>` marks
+  stale.
 
 ### Tasks & handoffs
 - `chatter task create|list|assign|done` — lightweight ownership and status.
@@ -271,16 +277,18 @@ fields to maintain — purpose lives in names the human already gave.
   `/clear`.
 - `--entrypoint board`: read-only overview — agents with live status dots,
   role, branch, and current task; recent chat; tasks; shared memory.
-- Both follow the focused workspace's repo. The board switches repos with
-  number keys and shows a numbered tab per universe; the chat view stays on
-  its own repo (digits there are typing) and shows only its repo name.
+- Both belong exclusively to the focused workspace's repository. They never
+  fall back to or navigate into another repository's stored data; without a
+  focused Git repository they show a clear no-context state.
 
 **Placement.** Views open as a session-modal popup by default. Pass
 `--placement tab` or `--placement split` to keep one open beside your work:
 
 ```sh
-herdr plugin pane open --plugin chatter --entrypoint chat --placement tab
-herdr plugin action invoke chatter.open-chat-tab   # same thing, as an action
+herdr plugin action invoke chatter.open-board                         # popup
+herdr plugin action invoke chatter.open-board-tab                     # persistent tab
+herdr plugin pane open --plugin chatter --entrypoint board --placement tab
+herdr plugin pane open --plugin chatter --entrypoint chat --placement split
 ```
 
 A persistent pane outlives Esc: there, Esc only cancels whatever is open (a
@@ -310,7 +318,7 @@ chatter chat [--limit N] [--all]      read the channel (marks it read)
 chatter brief [today|2h|30m]          what changed since you last checked
 chatter inbox [--all]                 your mail
 chatter note <text> [--type discovery|decision|dead-end] [--task TASK-n] [--commit SHA]
-chatter notes [query] [--all]         shared scratchpad
+chatter notes [query] [--task TASK-n] [--all]   shared memory
 chatter resolve <note-id>             mark a note stale
 chatter ask [agent] <question>        open a question
 chatter answer <id> <text>            answer one (notifies the asker)
@@ -434,22 +442,41 @@ duplicating work? Over-communicate? Does shared memory reduce repeated
 investigation? `chatter stats` measures exactly these. Prune primitives that
 go unused.
 
-Early findings from live testing: agents learn the protocol from one received
-message; the delivery footer literally decides etiquette (teaching
-`chatter send` produced DM replies to channel mentions — teaching
-`chatter post` fixed it); and agents will spontaneously relay questions
-between each other when given the primitives.
+Early findings from live testing: agents follow delivery footers literally,
+so Chatter now gives only the contextual next action; and agents will
+spontaneously relay questions between each other when given the primitives.
 
 ## Code layout
 
 ```
-bin/chatter      sh wrapper             bin/chatter.js   entry + dispatch
-src/util.js      flags, output, time    src/db.js        per-repo DBs, schema
-src/herdr.js     herdr CLI + roster     src/team.js      identity + delivery
-src/commands.js  commands + hooks       src/board.js     chat + board views
-src/setup.js     install wizard, doctor src/update.js    self-update, both flavors
-src/tui.js       painter, palette, wrap, keys
+bin/chatter       Node launcher          bin/chatter.ts    typed entry + dispatch
+src/types.ts      shared boundaries      src/db.ts         per-repo DBs, schema
+src/herdr.ts      Herdr CLI + guards     src/team.ts       identity + delivery
+src/commands.ts   commands + hooks       src/board.ts      chat + board views
+src/setup.ts      setup wizard, doctor   src/update.ts     self-update
+src/util.ts       flags, output, time    src/tui.ts        painter, wrap, keys
+dist/             committed CommonJS generated by TypeScript; never edit by hand
 ```
+
+## Contributing
+
+Production uses Node; Bun is contributor tooling only. Install the Bun version
+pinned in `package.json`, then use the frozen lockfile:
+
+```sh
+bun install --frozen-lockfile
+bun run check
+```
+
+`bun run check` typechecks strict TypeScript, clean-builds `dist/`, runs unit,
+smoke, and legacy-differential tests, checks dead code with Knip, and verifies
+the committed artifacts and manifest targets. Runtime dependencies must stay
+empty. TypeScript under `src/` and `bin/` is the only hand-edited application
+source; generated files under `dist/` must come from `bun run build`.
+
+Before a release, run `bun install --frozen-lockfile && bun run check`, review
+the rebuilt `dist/`, and commit source and generated output together. CI tests
+the build on supported Node versions on Linux and macOS.
 
 ## Herdr surface used (verified on 0.8.0 / protocol 19)
 

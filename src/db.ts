@@ -3,23 +3,26 @@
 // the plugin state dir. Worktrees of one repo share a DB (keyed by the git
 // common dir); unrelated repos are isolated universes.
 
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
-const { PLUGIN_ID, HERDR } = require('./herdr');
-const { die } = require('./util');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import { PLUGIN_ID, HERDR } from './herdr';
+import { die } from './util';
+import type { ChatterDb, FileRow, GitInfo } from './types';
 
 // One git spawn: branch, worktree toplevel, and the shared common dir that
 // identifies the repo across all of its linked worktrees.
-let _git;
-function gitInfo(cwd = process.cwd()) {
+let _git: GitInfo | undefined;
+export function gitInfo(cwd = process.cwd()): GitInfo {
   if (_git && _git.cwd === cwd) return _git;
   const r = spawnSync('git', ['-C', cwd, 'rev-parse',
     '--path-format=absolute', '--show-toplevel', '--git-common-dir'], { encoding: 'utf8' });
   if (r.status !== 0) return (_git = { cwd, branch: null, toplevel: null, repoRoot: null });
   const [toplevel, commonDir] = r.stdout.trim().split('\n');
+  if (!commonDir) return (_git = { cwd, branch: null, toplevel: toplevel || null, repoRoot: null });
   let repoRoot = commonDir;
   try { repoRoot = fs.realpathSync(commonDir); } catch { /* keep as reported */ }
   if (path.basename(repoRoot) === '.git') repoRoot = path.dirname(repoRoot);
@@ -30,13 +33,13 @@ function gitInfo(cwd = process.cwd()) {
 }
 
 // User-editable plugin config (e.g. the human's chat name).
-function configRoot() {
+export function configRoot(): string {
   return process.env.HERDR_PLUGIN_CONFIG_DIR
     || path.join(os.homedir(), '.config', 'herdr', 'plugins', 'config', PLUGIN_ID);
 }
 
 // The human's name in chatter (set with `chatter iam <name>`).
-function humanName() {
+export function humanName(): string {
   try {
     const n = fs.readFileSync(path.join(configRoot(), 'name'), 'utf8').trim();
     if (n) return n;
@@ -46,9 +49,9 @@ function humanName() {
 
 // Canonicalize so path comparisons (repo-boundary checks) never break on
 // symlinks — SQLite reports resolved paths, e.g. /private/var vs /var on macOS.
-const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+const real = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
 
-function stateRoot() {
+export function stateRoot(): string {
   if (process.env.HERDR_PLUGIN_STATE_DIR) return real(process.env.HERDR_PLUGIN_STATE_DIR);
   // Herdr's layout on Unix (verified 0.8.0): ~/.local/state/herdr/plugins/<id>
   const conventional = path.join(os.homedir(), '.local', 'state', 'herdr', 'plugins', PLUGIN_ID);
@@ -68,8 +71,8 @@ function stateRoot() {
   return real(fallback);
 }
 
-const sanitizeKey = (s) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 40) || 'repo';
-function repoKey(repoRoot) {
+const sanitizeKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 40) || 'repo';
+function repoKey(repoRoot: string): string {
   const hash = crypto.createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
   return `${sanitizeKey(path.basename(repoRoot))}-${hash}`;
 }
@@ -109,22 +112,37 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages (to_agent, read_at);
 `;
 
-function openDbFile(file) {
-  const { DatabaseSync } = require('node:sqlite');
+export function openDbFile(file: string): ChatterDb {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const d = new DatabaseSync(file);
   d.exec(SCHEMA);
   // Migration for pre-v0.16 universes.
   try { d.exec('ALTER TABLE agents ADD COLUMN departed_at TEXT'); } catch { /* exists */ }
-  return d;
+  // Node 22.5's first node:sqlite release returns an object whose every value
+  // is null for a missing `get()` row; newer Node releases return undefined.
+  // Normalize that runtime difference at the typed boundary so application
+  // code has one contract across every supported Node version.
+  return {
+    exec: (sql) => d.exec(sql),
+    prepare: <Row extends object = Record<string, never>>(sql: string) => {
+      const statement = d.prepare(sql);
+      return {
+        all: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params) as Row[],
+        // `all()[0]` avoids Node 22.5's null-filled phantom `get()` row while
+        // preserving legitimate rows (including aggregate rows containing null).
+        get: (...params: import('node:sqlite').SQLInputValue[]) => statement.all(...params)[0] as Row | undefined,
+        run: (...params: import('node:sqlite').SQLInputValue[]) => statement.run(...params),
+      };
+    },
+  };
 }
 
-function repoDbFile(repoRoot) {
+export function repoDbFile(repoRoot: string): string {
   return path.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
 }
 
 // Every per-repo DB currently on disk (for hooks and the board).
-function listRepoDbFiles() {
+export function listRepoDbFiles(): string[] {
   const dir = path.join(stateRoot(), 'repos');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
@@ -133,8 +151,8 @@ function listRepoDbFiles() {
 }
 
 // The calling context's repo DB (the default for all commands).
-let _db = null;
-function db() {
+let _db: ChatterDb | null = null;
+export function db(): ChatterDb {
   if (_db) return _db;
   const g = gitInfo();
   if (!g.repoRoot) die('chatter is per-repo — run it inside a git repository');
@@ -146,17 +164,25 @@ function db() {
   return _db;
 }
 
-const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+export const now = (): string => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
 // Which on-disk file a handle is operating on (repo-boundary checks).
-const dbFile = (d) => d.prepare("SELECT file FROM pragma_database_list WHERE name='main'").get().file;
+export const dbFile = (d: ChatterDb): string => {
+  const row = d.prepare<FileRow>("SELECT file FROM pragma_database_list WHERE name='main'").get();
+  if (!row) throw new Error('SQLite main database is unavailable');
+  return row.file;
+};
 
 // Append-only activity ledger. Silent for now; future briefs/reports read it.
-function logEvent(actor, kind, ref, data = null, d = db()) {
+export function logEvent(
+  actor: string,
+  kind: string,
+  ref: string | number | null,
+  data: unknown = null,
+  d: ChatterDb = db(),
+): void {
   try {
     d.prepare('INSERT INTO events (at, actor, kind, ref, data) VALUES (?,?,?,?,?)')
       .run(now(), actor, kind, ref, data ? JSON.stringify(data).slice(0, 1024) : null);
   } catch { /* the ledger must never break a command */ }
 }
-
-module.exports = { gitInfo, stateRoot, configRoot, humanName, repoKey, repoDbFile, openDbFile, listRepoDbFiles, db, dbFile, now, logEvent };

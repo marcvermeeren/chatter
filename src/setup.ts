@@ -1,30 +1,34 @@
 'use strict';
 // Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const { PLUGIN_ID, HERDR, herdr, sessionAgents } = require('./herdr');
-const { configRoot, humanName, stateRoot, listRepoDbFiles, openDbFile, gitInfo } = require('./db');
-const { die, parseFlags } = require('./util');
-const T = require('./tui');
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { PLUGIN_ID, HERDR, herdr, isRecord, sessionAgents } from './herdr';
+import { configRoot, humanName, stateRoot, gitInfo } from './db';
+import { die, parseFlags } from './util';
+import * as T from './tui';
+import { ensurePointerAndSymlink } from './commands';
+import { nameTaken } from './team';
+import { registration, updateStatus } from './update';
+import type { Identity } from './types';
 
 // The wordmark lives with the other painting primitives; re-exported here
 // because setup is where it was born and callers still ask for it.
-const { logoLines } = T;
+export const { logoLines } = T;
 
 // -------------------------------------------------------------- config edits
 
 const configToml = () => path.join(os.homedir(), '.config', 'herdr', 'config.toml');
-const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const TOAST_BLOCK = `
 # added by chatter setup
 [ui.toast]
 delivery = "herdr"
 `;
-const keyBlock = (key, action, description) => `
+const keyBlock = (key: string, action: string, description: string): string => `
 # added by chatter setup
 [[keys.command]]
 key = "${key}"
@@ -36,16 +40,25 @@ description = "${description}"
 // Is this exact plugin action already bound? The closing quote matters:
 // "chatter.open-chat" is a prefix of "chatter.open-chat-tab", so a substring
 // test would report the popup bound when only the tab binding exists.
-const actionBound = (text, action) =>
+const actionBound = (text: string, action: string): boolean =>
   new RegExp(`command\\s*=\\s*"${escRe(`${PLUGIN_ID}.${action}`)}"`).test(text);
 
 // Apply toast/keybinding config; returns human-readable report lines.
 // Each binding is decided independently: already bound, key taken, or added.
-function editHerdrConfig({ toasts, key, tabKey = null }) {
+interface SetupConfig {
+  toasts: boolean;
+  key: string | null;
+  tabKey?: string | null;
+  boardKey?: string | null;
+  boardTabKey?: string | null;
+}
+function editHerdrConfig({
+  toasts, key, tabKey = null, boardKey = null, boardTabKey = null,
+}: SetupConfig): string[] {
   const file = configToml();
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch { /* new file */ }
-  const report = [];
+  const report: string[] = [];
   let out = text;
   if (toasts) {
     if (/^\s*\[ui\.toast\]/m.test(text)) report.push('toasts: existing [ui.toast] setting respected');
@@ -54,6 +67,8 @@ function editHerdrConfig({ toasts, key, tabKey = null }) {
   const bindings = [
     { key, action: 'open-chat', description: 'group chat', label: 'keybinding', what: 'open chat' },
     { key: tabKey, action: 'open-chat-tab', description: 'group chat tab', label: 'tab keybinding', what: 'open chat in a tab' },
+    { key: boardKey, action: 'open-board', description: 'Chatter board', label: 'board keybinding', what: 'open board' },
+    { key: boardTabKey, action: 'open-board-tab', description: 'Chatter board tab', label: 'board tab keybinding', what: 'open board in a tab' },
   ];
   for (const b of bindings) {
     if (!b.key) continue;
@@ -79,27 +94,23 @@ function editHerdrConfig({ toasts, key, tabKey = null }) {
 
 // ------------------------------------------------------------------- doctor
 
-const { nameTaken } = require('./team');
+interface DoctorCheck { ok: boolean | null; label: string; hint?: string }
 
-function doctorChecks() {
-  const checks = [];
-  const add = (ok, label, hint) => checks.push({ ok, label, hint });
-  const major = parseInt(process.versions.node, 10);
-  add(major >= 22, `Node ${process.versions.node}`, 'install Node 22+');
+function doctorChecks(): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  const add = (ok: boolean | null, label: string, hint?: string): void => { checks.push({ ok, label, hint }); };
+  const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
+  add(major > 22 || (major === 22 && minor >= 5), `Node ${process.versions.node}`, 'install Node 22.5+');
   try { require('node:sqlite'); add(true, 'node:sqlite available'); }
   catch { add(false, 'node:sqlite available', 'Node build lacks built-in SQLite'); }
   const st = herdr(['status']);
   add(st.ok, 'Herdr server reachable', 'start Herdr, or run inside a Herdr session');
-  const pl = herdr(['plugin', 'list', '--json']);
-  const entry = pl.ok && pl.json && pl.json.result
-    ? (pl.json.result.plugins || []).find((p) => p.plugin_id === PLUGIN_ID)
-    : null;
+  const entry = registration();
   add(!!entry, 'plugin registered with Herdr', `herdr plugin install/link this directory`);
   // Best effort, hard-capped, silent when it fails: being offline must never
   // slow doctor down or paint it red. Informational only, never a ✗.
   if (entry) {
     try {
-      const { updateStatus } = require('./update');
       const st = updateStatus({ source: entry.source, root: entry.plugin_root }, { timeout: 3000 });
       if (st.state === 'behind') add(null, 'update available — run: chatter update');
       else if (st.state === 'current') add(null, `chatter is up to date (v${entry.version || '?'})`);
@@ -123,6 +134,10 @@ function doctorChecks() {
   // note when not — never a reported problem.
   const tabBound = actionBound(cfg, 'open-chat-tab');
   add(tabBound || null, tabBound ? 'chat tab keybinding bound' : 'chat tab keybinding not bound (optional — run: chatter setup)');
+  const boardBound = actionBound(cfg, 'open-board');
+  add(boardBound || null, boardBound ? 'board keybinding bound' : 'board keybinding not bound (optional — run: chatter setup)');
+  const boardTabBound = actionBound(cfg, 'open-board-tab');
+  add(boardTabBound || null, boardTabBound ? 'board tab keybinding bound' : 'board tab keybinding not bound (optional — run: chatter setup)');
   const g = gitInfo();
   add(null, g.repoRoot ? `current repo: ${path.basename(g.repoRoot)}` : 'not inside a git repo (chatter is per-repo)');
   // session-wide by design: doctor is a machine-level diagnostic
@@ -130,7 +145,7 @@ function doctorChecks() {
   return checks;
 }
 
-function renderChecks(checks) {
+function renderChecks(checks: readonly DoctorCheck[]): string[] {
   return checks.map((c) => c.ok === null
     ? `   ${T.FAINT}ℹ${T.RESET}  ${T.FAINT}${c.label}${T.RESET}`
     : c.ok
@@ -138,7 +153,7 @@ function renderChecks(checks) {
       : `   ${T.NEWMARK}✗${T.RESET}  ${c.label}${c.hint ? `  ${T.FAINT}→ ${c.hint}${T.RESET}` : ''}`);
 }
 
-function cmdDoctor() {
+export function cmdDoctor(): void {
   const width = process.stdout.columns || 100;
   console.log(logoLines(width).join('\n'));
   const checks = doctorChecks();
@@ -150,20 +165,23 @@ function cmdDoctor() {
 
 // -------------------------------------------------------------------- apply
 
-function applySetup({ name, toasts, key, tabKey = null }) {
-  const report = [];
+interface ApplySetupOptions extends SetupConfig { name: string | null }
+function applySetup({
+  name, toasts, key, tabKey = null, boardKey = null, boardTabKey = null,
+}: ApplySetupOptions): string[] {
+  const report: string[] = [];
   if (name) {
     fs.mkdirSync(configRoot(), { recursive: true });
     fs.writeFileSync(path.join(configRoot(), 'name'), name + '\n');
     report.push(`you are "${name}"`);
   }
-  const { ensurePointerAndSymlink } = require('./commands');
   ensurePointerAndSymlink();
   report.push('chatter linked into ~/.local/bin');
-  report.push(...editHerdrConfig({ toasts, key, tabKey }));
+  report.push(...editHerdrConfig({ toasts, key, tabKey, boardKey, boardTabKey }));
   if (toasts) {
     const r = herdr(['notification', 'show', 'chatter', '--body', `hi ${name || humanName()} — notifications work`, '--sound', 'done']);
-    report.push(r.ok && r.json && r.json.result.shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
+    const shown = r.ok && isRecord(r.json) && isRecord(r.json.result) && r.json.result.shown === true;
+    report.push(shown ? 'test toast fired (did you see it?)' : 'test toast queued (visible once Herdr UI is active)');
   }
   return report;
 }
@@ -175,10 +193,11 @@ const defaultName = () => {
   return n || 'user';
 };
 
-function cmdSetup(me, args) {
+export function cmdSetup(me: Identity, args: readonly string[]): void {
   if (!me.human) die('chatter setup is human-only');
   const opts = parseFlags(args, {
     yes: false, name: null, key: 'prefix+alt+c', 'tab-key': 'prefix+alt+t',
+    'board-key': 'prefix+alt+b', 'board-tab-key': 'prefix+alt+shift+b',
     'no-toasts': false, 'no-keybind': false,
   });
   const width = process.stdout.columns || 100;
@@ -186,7 +205,9 @@ function cmdSetup(me, args) {
   if (!opts.yes) {
     die('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
       + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"]\n'
-      + '                       [--tab-key "prefix+alt+t"] [--no-toasts] [--no-keybind]');
+      + '                       [--tab-key "prefix+alt+t"] [--board-key "prefix+alt+b"]\n'
+      + '                       [--board-tab-key "prefix+alt+shift+b"]\n'
+      + '                       [--no-toasts] [--no-keybind]');
   }
   const name = (opts.name || defaultName()).toLowerCase();
   const taken = nameTaken(name);
@@ -197,28 +218,60 @@ function cmdSetup(me, args) {
     toasts: !opts['no-toasts'],
     key: opts['no-keybind'] ? null : opts.key,
     tabKey: opts['no-keybind'] ? null : opts['tab-key'],
+    boardKey: opts['no-keybind'] ? null : opts['board-key'],
+    boardTabKey: opts['no-keybind'] ? null : opts['board-tab-key'],
   });
   console.log(report.map((l) => `   ${T.GREEN}✓${T.RESET}  ${l}`).join('\n'));
   console.log('');
   const checks = doctorChecks();
   console.log(renderChecks(checks).join('\n'));
   console.log(`\nopen the chat: ${T.BOLD}${opts.key}${T.RESET} as a popup · ${T.BOLD}${opts['tab-key']}${T.RESET} as a tab`
+    + `\nopen the board: ${T.BOLD}${opts['board-key']}${T.RESET} as a popup · ${T.BOLD}${opts['board-tab-key']}${T.RESET} as a tab`
     + `\n(or: herdr plugin pane open --plugin ${PLUGIN_ID} --entrypoint chat [--placement tab|split])`);
 }
 
 // ----------------------------------------------------------- wizard (popup)
 
-const STEPS = { NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, DONE: 4 };
+const STEPS = {
+  NAME: 0, TOASTS: 1, KEY: 2, TABKEY: 3, BOARDKEY: 4, BOARDTABKEY: 5, DONE: 6,
+} as const;
+export type SetupStep = typeof STEPS[keyof typeof STEPS];
 
-function wizard() {
+export function nextSetupStep(step: SetupStep): SetupStep {
+  if (step === STEPS.NAME) return STEPS.TOASTS;
+  if (step === STEPS.TOASTS) return STEPS.KEY;
+  if (step === STEPS.KEY) return STEPS.TABKEY;
+  if (step === STEPS.TABKEY) return STEPS.BOARDKEY;
+  if (step === STEPS.BOARDKEY) return STEPS.BOARDTABKEY;
+  if (step === STEPS.BOARDTABKEY) return STEPS.DONE;
+  return STEPS.DONE;
+}
+
+interface SetupState {
+  step: SetupStep;
+  name: string;
+  toasts: boolean;
+  key: string;
+  tabKey: string;
+  boardKey: string;
+  boardTabKey: string;
+  error: string;
+  report: string[] | null;
+  checks: DoctorCheck[] | null;
+  toastsExisting: boolean;
+}
+
+export function wizard(): void {
   const painter = T.makePainter();
   const width = () => process.stdout.columns || 100;
-  const state = {
+  const state: SetupState = {
     step: STEPS.NAME,
     name: defaultName(),
     toasts: true,
     key: 'prefix+alt+c',
     tabKey: 'prefix+alt+t',
+    boardKey: 'prefix+alt+b',
+    boardTabKey: 'prefix+alt+shift+b',
     error: '',
     report: null,
     checks: null,
@@ -248,6 +301,16 @@ function wizard() {
       out.push(`   keybinding to open the chat in a tab ${T.FAINT}(a pane that stays open — clear to skip)${T.RESET}`);
       out.push('   ' + field(state.tabKey));
       out.push(`   ${T.FAINT}popup: ${state.key.trim() || '(skipped)'}${T.RESET}`);
+      out.push('', T.hint('Enter continues', 'Esc aborts'));
+    } else if (state.step === STEPS.BOARDKEY) {
+      out.push(`   keybinding to open the board as a popup ${T.FAINT}(clear the field to skip)${T.RESET}`);
+      out.push('   ' + field(state.boardKey));
+      out.push(`   ${T.FAINT}chat: ${state.key.trim() || '(skipped)'} popup · ${state.tabKey.trim() || '(skipped)'} tab${T.RESET}`);
+      out.push('', T.hint('Enter continues', 'Esc aborts'));
+    } else if (state.step === STEPS.BOARDTABKEY) {
+      out.push(`   keybinding to open the board in a tab ${T.FAINT}(a pane that stays open — clear to skip)${T.RESET}`);
+      out.push('   ' + field(state.boardTabKey));
+      out.push(`   ${T.FAINT}board popup: ${state.boardKey.trim() || '(skipped)'}${T.RESET}`);
       out.push('', T.hint('Enter applies everything', 'Esc aborts'));
     } else {
       out.push(...(state.report || []).map((l) => `   ${T.GREEN}✓${T.RESET}  ${l}`));
@@ -259,7 +322,7 @@ function wizard() {
   };
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on('data', (b) => {
+  process.stdin.on('data', (b: Buffer) => {
     const key = T.decodeKey(b.toString());
     if (key.type === 'esc' || key.type === 'close') process.exit(0);
     if (state.step === STEPS.NAME) {
@@ -269,27 +332,37 @@ function wizard() {
         const taken = state.name ? nameTaken(state.name) : 'empty';
         if (!state.name) state.error = 'name required';
         else if (taken) state.error = `"${state.name}" is ${taken} — pick another`;
-        else { state.error = ''; state.step = STEPS.TOASTS; }
+        else { state.error = ''; state.step = nextSetupStep(state.step); }
       }
     } else if (state.step === STEPS.TOASTS) {
       if (key.type === 'text' && (key.text === 'y' || key.text === 'n')) state.toasts = key.text === 'y';
-      else if (key.type === 'enter') state.step = STEPS.KEY;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
     } else if (state.step === STEPS.KEY) {
       if (key.type === 'backspace') state.key = state.key.slice(0, -1);
       else if (key.type === 'text') state.key += key.text;
-      else if (key.type === 'enter') state.step = STEPS.TABKEY;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
     } else if (state.step === STEPS.TABKEY) {
       if (key.type === 'backspace') state.tabKey = state.tabKey.slice(0, -1);
       else if (key.type === 'text') state.tabKey += key.text;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
+    } else if (state.step === STEPS.BOARDKEY) {
+      if (key.type === 'backspace') state.boardKey = state.boardKey.slice(0, -1);
+      else if (key.type === 'text') state.boardKey += key.text;
+      else if (key.type === 'enter') state.step = nextSetupStep(state.step);
+    } else if (state.step === STEPS.BOARDTABKEY) {
+      if (key.type === 'backspace') state.boardTabKey = state.boardTabKey.slice(0, -1);
+      else if (key.type === 'text') state.boardTabKey += key.text;
       else if (key.type === 'enter') {
         state.report = applySetup({
           name: state.name,
           toasts: state.toasts && !state.toastsExisting,
           key: state.key.trim() || null,
           tabKey: state.tabKey.trim() || null,
+          boardKey: state.boardKey.trim() || null,
+          boardTabKey: state.boardTabKey.trim() || null,
         });
         state.checks = doctorChecks();
-        state.step = STEPS.DONE;
+        state.step = nextSetupStep(state.step);
       }
     } else if (state.step === STEPS.DONE && key.type === 'enter') {
       // Popups are singletons: exit first, then a detached child opens chat.
@@ -303,9 +376,7 @@ function wizard() {
   render();
 }
 
-function hookOpenSetup() {
+export function hookOpenSetup(): void {
   const r = herdr(['plugin', 'pane', 'open', '--plugin', PLUGIN_ID, '--entrypoint', 'setup']);
   if (!r.ok) { console.error(r.raw); process.exit(1); }
 }
-
-module.exports = { cmdDoctor, cmdSetup, wizard, hookOpenSetup, logoLines, editHerdrConfig };

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 22.5.1
+            deadcode: false
+          - os: ubuntu-latest
+            node: 24.x
+            deadcode: true
+          - os: ubuntu-latest
+            node: 26.x
+            deadcode: false
+          - os: macos-latest
+            node: 24.x
+            deadcode: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run test:unit
+      - run: bun run test:smoke
+      - run: bun run test:differential
+      - if: matrix.deadcode
+        run: bun run deadcode
+      - run: bun run verify:artifacts
