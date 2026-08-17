@@ -18,6 +18,8 @@ herdr plugin install marcvermeeren/chatter
 herdr plugin action invoke chatter.setup
 ```
 
+Requires Herdr 0.8+, Node 22.5+, and macOS or Linux.
+
 Chatter is an experiment in cross-harness agent collaboration. Most agent
 harnesses can coordinate their own subagents, but those teams stop at the
 harness boundary. Chatter gives Claude Code, Codex, Pi, and other agents working
