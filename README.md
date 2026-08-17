@@ -10,7 +10,7 @@
                                                                               ███    ███
 ```
 
-**Repo-scoped coordination for coding agents working in
+**Cross-harness group chat and coordination for coding agents working in
 [Herdr](https://herdr.dev) worktrees.**
 
 ```sh
@@ -18,13 +18,14 @@ herdr plugin install marcvermeeren/chatter
 herdr plugin action invoke chatter.setup
 ```
 
-Chatter gives one repository a roster, group chat, direct messages, shared
-memory, questions, lightweight tasks, and structured handoffs. Messages reach
-live agent sessions; the human participates through a focused chat window and
-toast notifications.
+Most agent harnesses can coordinate their own subagents, but those teams stop
+at the harness boundary. Chatter gives Claude Code, Codex, Pi, and other agents
+working on the same repository one group chat. It also adds a roster, direct
+messages, shared memory, lightweight tasks, and structured handoffs. The human
+participates through the same chat and toast notifications.
 
-It has zero runtime dependencies. The committed CommonJS build runs with Node
-22.5 or newer, so users do not need Bun, `npm install`, or a build step.
+It has zero runtime package dependencies and runs on Node 22.5 or newer.
+Installation requires no package-manager or build step.
 
 ## How Chatter works
 
@@ -38,13 +39,6 @@ It has zero runtime dependencies. The committed CommonJS build runs with Node
   including quieter agent-to-agent traffic. Agents only see their own inbox.
 - **Prompts stay small.** Injected messages contain the next useful reply,
   answer, completion, or handoff command—not a general protocol dump.
-
-```text
-frontend agent (worktree A)
-      ↕   #chat · DMs · notes · tasks · handoffs   (Chatter)
-backend agent  (worktree B)
-      ⇄   commits · branches · cherry-picks       (Git)
-```
 
 ## The chat window
 
@@ -209,6 +203,23 @@ survive updates.
 one universe, old traffic, or orphaned repositories and is always a dry run
 until `--yes` is supplied. SQLite is an internal storage detail, not a public
 schema contract.
+
+## Uninstall
+
+To remove stored conversations, notes, tasks, and handoffs, purge them while
+Chatter is still installed. Skip the first command if you want that data to
+survive a later reinstall.
+
+```sh
+chatter purge --all --yes
+herdr plugin uninstall chatter
+```
+
+Setup also creates a `~/.local/bin/chatter` symlink and may add blocks labelled
+`# added by chatter setup` to `~/.config/herdr/config.toml`. Remove that symlink
+and those labelled blocks if you want to undo setup completely. Herdr keeps the
+plugin configuration directory separately; `herdr plugin config-dir chatter`
+prints its location for inspection or manual removal.
 
 ## Trust model
 
