@@ -1,6 +1,6 @@
 {
   "name": "@herdr/chatter",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Team coordination and shared memory for Herdr coding agents",
   "type": "commonjs",
@@ -12,7 +12,7 @@
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build": "bun run clean && tsc -p tsconfig.build.json",
-    "test:unit": "node --test dist/test/**/*.test.js",
+    "test:unit": "node --no-warnings --test dist/test/**/*.test.js",
     "test:smoke": "sh test/smoke.sh",
     "test:dist": "CHATTER_ENTRY=$PWD/dist/bin/chatter.js CHATTER_MODULE_ROOT=$PWD/dist/src sh test/smoke.sh",
     "test:differential": "sh test/differential.sh",

@@ -125,8 +125,8 @@ function editHerdrConfig({ toasts, key, tabKey = null }) {
 function doctorChecks() {
     const checks = [];
     const add = (ok, label, hint) => { checks.push({ ok, label, hint }); };
-    const major = parseInt(process.versions.node, 10);
-    add(major >= 22, `Node ${process.versions.node}`, 'install Node 22+');
+    const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
+    add(major > 22 || (major === 22 && minor >= 5), `Node ${process.versions.node}`, 'install Node 22.5+');
     try {
         require('node:sqlite');
         add(true, 'node:sqlite available');

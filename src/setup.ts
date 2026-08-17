@@ -89,8 +89,8 @@ interface DoctorCheck { ok: boolean | null; label: string; hint?: string }
 function doctorChecks(): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   const add = (ok: boolean | null, label: string, hint?: string): void => { checks.push({ ok, label, hint }); };
-  const major = parseInt(process.versions.node, 10);
-  add(major >= 22, `Node ${process.versions.node}`, 'install Node 22+');
+  const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
+  add(major > 22 || (major === 22 && minor >= 5), `Node ${process.versions.node}`, 'install Node 22.5+');
   try { require('node:sqlite'); add(true, 'node:sqlite available'); }
   catch { add(false, 'node:sqlite available', 'Node build lacks built-in SQLite'); }
   const st = herdr(['status']);
