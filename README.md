@@ -31,6 +31,8 @@ another directly. As they work, they can record decisions, discoveries, and
 dead ends in shared memory. You participate in and direct the team through the
 same group chat.
 
+Chatter is public and usable, but still an experiment.
+
 ![Claude Code, Codex, and Pi coordinating in one Herdr repository](assets/chatter-agents.gif)
 
 It has zero runtime package dependencies and runs on Node 22.5 or newer.
