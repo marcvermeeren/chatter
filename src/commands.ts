@@ -10,7 +10,10 @@ import {
   PLUGIN_ID, herdr, invalidateSessionAgents, isRecord, matchLive, pluginInvocationContext,
 } from './herdr';
 import { db, dbFile, now, gitInfo, repoDbFile, openDbFile, listRepoDbFiles, logEvent, configRoot, humanName } from './db';
-import { sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount, nameTaken, sanitizeName, teamAgents } from './team';
+import {
+  sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount,
+  nameTaken, nameCollisionAdvice, sanitizeName, teamAgents,
+} from './team';
 import { die, parseFlags, emit, age, toMs, median, fmtDur } from './util';
 import { clean } from './tui';
 import type {
@@ -663,8 +666,8 @@ export function spawnAgent(
   const fail = (msg: string): CommandResult => ({ ok: false, lines: [msg] });
   if (!rawName) return fail('usage: spawn <name> [--kind codex|claude|pi|...] [--purpose "why"] [--branch B] [--base REF] [--tab]');
   const name = sanitizeName(rawName);
-  const taken = nameTaken(name);
-  if (taken) return fail(`"${name}" is ${taken} — pick another name`);
+  const collision = nameCollisionAdvice(name);
+  if (collision) return fail(collision);
   const lines: string[] = [];
   if (!kind) {
     const kinds = teamAgents(d).map((a) => a.agent).filter(Boolean);

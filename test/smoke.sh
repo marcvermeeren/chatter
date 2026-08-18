@@ -108,6 +108,25 @@ sqlite3 "$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)" \
   "INSERT OR IGNORE INTO agents (name, registered_at, last_seen_at) VALUES ('takenname','x','x')" 2>/dev/null
 $CH iam takenname >/dev/null 2>&1 && fail "registered name adopted" || ok "registered agent name refused"
 
+echo "# stale handle recovery"
+STALE_REPO="$TMP/stale-project"; mkdir -p "$STALE_REPO" && git -C "$STALE_REPO" init -q
+( cd "$STALE_REPO" && $CH note "stale universe" >/dev/null 2>&1 )
+STALE_DB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/stale-project-*/chatter.db)
+sqlite3 "$STALE_DB" "INSERT INTO agents (name,repo_root,registered_at,last_seen_at) VALUES ('stale','$STALE_REPO','x','x'); INSERT INTO messages (from_agent,to_agent,body,created_at,delivered_at) VALUES ('stale','tester','kept history','x','x')"
+cd "$REPO"
+STALE_OUT=$($CH spawn stale --kind codex 2>&1)
+echo "$STALE_OUT" | grep -q 'registered in stale-project' \
+  && echo "$STALE_OUT" | grep -q 'chatter forget stale' \
+  && ok "stored collision names its repo and recovery command" || fail "stored collision guidance: $STALE_OUT"
+( cd "$STALE_REPO" && $CH forget stale >/dev/null 2>&1 )
+DEPARTED=$(sqlite3 "$STALE_DB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='stale'")
+HISTORY=$(sqlite3 "$STALE_DB" "SELECT COUNT(*) FROM messages WHERE body='kept history'")
+[ "$DEPARTED" = "1" ] && [ "$HISTORY" = "1" ] \
+  && ok "forget frees a stale handle while retaining history" || fail "forget stale-handle contract"
+REUSE_OUT=$($CH spawn stale --kind codex 2>&1)
+echo "$REUSE_OUT" | grep -Eq 'registered in|live agent' \
+  && fail "forgotten handle still blocked: $REUSE_OUT" || ok "forgotten handle passes spawn name preflight"
+
 echo "# repo isolation"
 REPO_B="$TMP/repo-b"; mkdir -p "$REPO_B" && git -C "$REPO_B" init -q
 cd "$REPO_B"
@@ -167,6 +186,10 @@ OUT=$($CHF agents)
 echo "$OUT" | grep -q "alpha" && ok "roster shows in-repo live agent" || fail "roster shows in-repo live agent"
 echo "$OUT" | grep -q "beta" && fail "roster leaks other repo's agent" || ok "roster excludes other repo's agent"
 echo "$OUT" | grep "moved" | grep -q "offline" && ok "moved-away agent shows offline, not live" || fail "moved-away agent shows offline"
+LIVE_COLLISION=$($CHF spawn alpha --kind codex 2>&1)
+echo "$LIVE_COLLISION" | grep -q 'live agent' \
+  && ! echo "$LIVE_COLLISION" | grep -q 'chatter forget' \
+  && ok "live collision does not suggest forgetting" || fail "live collision guidance: $LIVE_COLLISION"
 $CHF send beta "hi" >/dev/null 2>&1 && fail "send to other-repo agent accepted" || ok "send to other-repo agent refused"
 : > "$FAKE_CALLS"
 $CHF send moved "hi" 2>/dev/null | grep -q queued && ok "send to moved-away agent queues" || fail "send to moved-away agent queues"

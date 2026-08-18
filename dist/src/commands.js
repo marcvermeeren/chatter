@@ -752,9 +752,9 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     if (!rawName)
         return fail('usage: spawn <name> [--kind codex|claude|pi|...] [--purpose "why"] [--branch B] [--base REF] [--tab]');
     const name = (0, team_1.sanitizeName)(rawName);
-    const taken = (0, team_1.nameTaken)(name);
-    if (taken)
-        return fail(`"${name}" is ${taken} — pick another name`);
+    const collision = (0, team_1.nameCollisionAdvice)(name);
+    if (collision)
+        return fail(collision);
     const lines = [];
     if (!kind) {
         const kinds = (0, team_1.teamAgents)(d).map((a) => a.agent).filter(Boolean);

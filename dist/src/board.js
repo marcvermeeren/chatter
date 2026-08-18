@@ -248,8 +248,7 @@ function handleError(w) {
         return 'handle required';
     if (w.roster.some((r) => r.handle === p.handle))
         return `"${p.handle}" is already in this plan`;
-    const taken = (0, team_1.nameTaken)(p.handle);
-    return taken ? `"${p.handle}" is ${taken} — pick another` : '';
+    return (0, team_1.nameCollisionAdvice)(p.handle) || '';
 }
 function renderWizard(_d, file, ui) {
     const width = process.stdout.columns || 100;

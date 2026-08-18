@@ -5,7 +5,7 @@
 import path from 'node:path';
 import { matchLive, herdr, pluginInvocationContext } from './herdr';
 import { gitInfo, repoDbFile, openDbFile, humanName } from './db';
-import { postToChat, teamAgents, sendMessage, nameTaken, sanitizeName } from './team';
+import { postToChat, teamAgents, sendMessage, nameCollisionAdvice, sanitizeName } from './team';
 import { taskLabel, buildBrief, spawnAgent, setRole } from './commands';
 import { toMs } from './util';
 import * as T from './tui';
@@ -261,8 +261,7 @@ function handleError(w: WizardState): string {
   const p = w.draft;
   if (!p.handle) return 'handle required';
   if (w.roster.some((r) => r.handle === p.handle)) return `"${p.handle}" is already in this plan`;
-  const taken = nameTaken(p.handle);
-  return taken ? `"${p.handle}" is ${taken} — pick another` : '';
+  return nameCollisionAdvice(p.handle) || '';
 }
 
 function renderWizard(_d: ChatterDb, file: string, ui: UiState): string[] {

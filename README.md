@@ -182,7 +182,8 @@ existing pane/worktree name.
 When Herdr reports a pane or worktree closed, Chatter marks that agent departed.
 It disappears from normal roster/completion and can be inspected with
 `agents --all`. `chatter forget <agent>` handles missed departures and drops
-only undelivered mail; history remains.
+only undelivered mail; history remains. If an old repository still claims a
+handle, run `chatter forget <name>` from that repository to free it.
 
 ## Updates and data
 

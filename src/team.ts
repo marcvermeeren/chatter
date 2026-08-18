@@ -8,8 +8,8 @@ import { herdr, sessionAgents, invalidateSessionAgents, paneLabel } from './herd
 import { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } from './db';
 import { die } from './util';
 import type {
-  AgentStatus, ChatterDb, CountRow, HandoffRow, Identity, LastReadRow, LiveAgent,
-  MessageRow, NameRow, PaneRow,
+  AgentRow, AgentStatus, ChatterDb, CountRow, HandoffRow, Identity, LastReadRow,
+  LiveAgent, MessageRow, NameRow, PaneRow, ValueRow,
 } from './types';
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -111,18 +111,44 @@ function rosterNames(d: ChatterDb = db()): string[] {
   return d.prepare<NameRow>('SELECT name FROM agents WHERE departed_at IS NULL').all().map((r) => r.name);
 }
 
+type NameConflict =
+  | { kind: 'live' }
+  | { kind: 'registered'; repository: string };
+
+function findNameConflict(name: string): NameConflict | null {
+  if (sessionAgents().some((a) => a.name === name)) return { kind: 'live' };
+  for (const f of listRepoDbFiles()) {
+    const d = openDbFile(f);
+    if (!d.prepare<{ present: number }>('SELECT 1 AS present FROM agents WHERE name = ? AND departed_at IS NULL').get(name)) continue;
+    const mark = d.prepare<ValueRow>("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
+    const row = mark ? null
+      : d.prepare<Pick<AgentRow, 'repo_root'>>('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL LIMIT 1').get();
+    const root = mark?.value || row?.repo_root;
+    const fallback = path.basename(path.dirname(f)).replace(/-[0-9a-f]{8}$/, '');
+    return { kind: 'registered', repository: root ? path.basename(root) : fallback };
+  }
+  return null;
+}
+
 // Is a name already claimed anywhere — live agents or any repo's roster?
 // Departed rows free their name (a re-spawn is a comeback: queued mail from
 // before departure delivers when the name verifiably returns).
 // session-wide by design: names must be globally unique.
 export function nameTaken(name: string): string | null {
-  if (sessionAgents().some((a) => a.name === name)) return 'a live agent';
-  for (const f of listRepoDbFiles()) {
-    if (openDbFile(f).prepare<{ present: number }>('SELECT 1 AS present FROM agents WHERE name = ? AND departed_at IS NULL').get(name)) {
-      return `a registered agent in ${path.basename(path.dirname(f))}`;
-    }
+  const conflict = findNameConflict(name);
+  if (!conflict) return null;
+  return conflict.kind === 'live' ? 'a live agent' : `a registered agent in ${conflict.repository}`;
+}
+
+// Spawn surfaces can offer recovery only for stored registrations. A live
+// Herdr agent still owns its handle even if its database row is retired.
+export function nameCollisionAdvice(name: string): string | null {
+  const conflict = findNameConflict(name);
+  if (!conflict) return null;
+  if (conflict.kind === 'live') {
+    return `"${name}" is a live agent — close or rename it, or choose another name`;
   }
-  return null;
+  return `"${name}" is registered in ${conflict.repository} — if stale, run "chatter forget ${name}" from that repository; otherwise choose another name`;
 }
 
 // Resolve a user-typed recipient against this repo's roster (plus live agents
