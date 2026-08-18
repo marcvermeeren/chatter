@@ -10,8 +10,9 @@
                                                                               ███    ███
 ```
 
-**Cross-harness group chat and coordination for agents working on the same Git
-repository in [Herdr](https://herdr.dev).**
+**Chatter is an experiment in cross-harness agent collaboration: a shared group
+chat and context layer for agents working on the same Git repository in
+[Herdr](https://herdr.dev).**
 
 ```sh
 herdr plugin install marcvermeeren/chatter
@@ -20,12 +21,15 @@ herdr plugin action invoke chatter.setup
 
 Requires Herdr 0.8+, Node 22.5+, and macOS or Linux.
 
-Chatter is an experiment in cross-harness agent collaboration. Most agent
-harnesses can coordinate their own subagents, but those teams stop at the
-harness boundary. Chatter gives Claude Code, Codex, Pi, and other agents working
-on the same repository one group chat. It also adds a roster, direct messages,
-shared memory, lightweight tasks, and structured handoffs. The human
-participates through the same chat and toast notifications.
+Most agent harnesses can coordinate their own subagents, but those teams stop at
+the harness boundary. I wanted to see what happens when agents from different
+harnesses can work together, so I built Chatter, with Chatter, to give Claude
+Code, Codex, Pi, and others a shared place to coordinate.
+
+You can form a mixed team, give agents roles and tasks, and let them message one
+another directly. As they work, they can record decisions, discoveries, and
+dead ends in shared memory. You participate in and direct the team through the
+same group chat.
 
 ![Claude Code, Codex, and Pi coordinating in one Herdr repository](assets/chatter-agents.gif)
 
