@@ -106,6 +106,7 @@ test('board is a compact overview ordered by agents, tasks, questions, then memo
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'chatter.db');
   const d = openDbFile(file);
+  d.prepare("INSERT INTO agents (name, kind, registered_at) VALUES ('codex', 'codex', '2026-01-01 00:00:00')").run();
   d.prepare("INSERT INTO messages (from_agent, to_agent, body, kind, created_at) VALUES ('marc', '#chat', 'chat belongs elsewhere', 'chat', '2026-01-01 00:00:00')").run();
   d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'question', 'question details stay out of the board', 'active', '2026-01-01 00:00:00')").run();
   d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'decision', 'keep the board compact', 'active', '2026-01-01 00:00:01')").run();
@@ -115,6 +116,7 @@ test('board is a compact overview ordered by agents, tasks, questions, then memo
   const questions = lines.findIndex((line) => line.trim() === 'Open questions  1');
   const memory = lines.findIndex((line) => line.trim() === 'Shared memory');
   assert.ok(agents < tasks && tasks < questions && questions < memory);
+  assert.match(lines.find((line) => line.includes('@codex')) ?? '', /@codex\s+codex\s+offline/);
   assert.ok(lines.some((line) => line.includes('keep the board compact')));
   assert.ok(lines.every((line) => !line.includes('Group chat')));
   assert.ok(lines.every((line) => !line.includes('chat belongs elsewhere')));

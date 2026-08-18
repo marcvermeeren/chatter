@@ -669,7 +669,8 @@ function renderBoard(d, file) {
         const l = (0, herdr_1.matchLive)(live, a);
         const st = l?.agent_status ?? 'offline';
         const t = taskBy[a.name];
-        out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(rosterIdentity(a.name, a.role), 32)}${T.CHROME}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
+        const harness = compactBoardText(l?.agent || a.kind || '', 10).padEnd(10);
+        out.push(` ${(dot[st] || T.FAINT)}●${T.RESET} ${padVis(rosterIdentity(a.name, a.role), 32)}${T.CHROME}${harness}${st.padEnd(9)}${T.RESET} ${(a.branch || '').padEnd(18)} ${t ? t.id : ''}`.trimEnd());
     }
     out.push('', ` ${T.BOLD}Tasks${T.RESET}`);
     if (!tasks.length)
