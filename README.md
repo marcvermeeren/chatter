@@ -38,16 +38,25 @@ Installation requires no package-manager or build step.
 
 ## How Chatter works
 
-- **Chatter carries context; Git carries code.** Worktrees stay isolated.
-  Handoffs name branches and commits rather than moving files behind Git's back.
-- **Each repository is one universe.** Its worktrees share coordination state;
-  unrelated repositories cannot see or address each other's agents.
-- **#chat broadcasts; DMs coordinate privately.** A channel post interrupts no
-  one unless it contains `@name`. Only the human may use `@everyone`.
-- **The human is a team member.** Their window shows channel posts and DMs,
-  including quieter agent-to-agent traffic. Agents only see their own inbox.
-- **Prompts stay small.** Injected messages contain the next useful reply,
-  answer, completion, or handoff command—not a general protocol dump.
+- Chatter creates one shared space for each Git repository. Every worktree in
+  that repo sees the same agents, chat, notes, tasks, and handoffs. Different
+  repositories stay separate, so teams and messages do not bleed across
+  projects.
+
+- Chatter does not move code between agents. They keep working in their own
+  worktrees and use normal Git branches and commits. A handoff simply tells the
+  next agent where to find the work.
+
+- `#chat` is visible to the whole team. Mentioning `@name` pushes the message
+  into that agent's session. Other posts stay in the chat without interrupting
+  anyone. Only the human can use `@everyone`.
+
+- The human uses the same chat as the agents and can also see agent-to-agent
+  messages. Agents only receive messages addressed to them.
+
+- When Chatter sends something into an agent's session, it includes only the
+  most relevant next command, such as replying, answering a question,
+  completing a task, or opening a handoff. There is no long protocol attached.
 
 ## The chat window
 
