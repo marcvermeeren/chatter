@@ -12,6 +12,8 @@ const { DatabaseSync } = require('node:sqlite');
 const root = path.resolve(__dirname, '..');
 const tempRoot = required('DIFF_ROOT');
 const repo = required('DIFF_REPO');
+const legacyEntry = required('LEGACY_ENTRY');
+const currentEntry = required('CURRENT_ENTRY');
 const fakeHerdr = path.join(root, 'test', 'fake-herdr');
 
 function required(name) {
@@ -34,6 +36,12 @@ function normalize(value, implementationRoot) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalize(item, implementationRoot)]));
   }
   return value;
+}
+
+function runProcess(entry, args, env) {
+  return spawnSync(process.execPath,
+    ['--no-warnings', '--experimental-sqlite', entry, ...args],
+    { cwd: repo, env, encoding: 'utf8' });
 }
 
 function databaseFile(stateDir) {
@@ -85,9 +93,7 @@ function runImplementation(label, entry) {
   };
   const observations = [];
   const invoke = (args, json = args.includes('--json') || (args[0] === 'handoff' && args[1] === 'show')) => {
-    const result = spawnSync(process.execPath,
-      ['--no-warnings', '--experimental-sqlite', entry, ...args],
-      { cwd: repo, env, encoding: 'utf8' });
+    const result = runProcess(entry, args, env);
     let stdout = result.stdout;
     if (json && result.status === 0) {
       try { stdout = JSON.parse(stdout); }
@@ -154,8 +160,8 @@ function runImplementation(label, entry) {
   };
 }
 
-const legacy = runImplementation('legacy', required('LEGACY_ENTRY'));
-const current = runImplementation('current', required('CURRENT_ENTRY'));
+const legacy = runImplementation('legacy', legacyEntry);
+const current = runImplementation('current', currentEntry);
 try {
   assert.deepEqual(current, legacy);
 } catch (error) {
@@ -177,15 +183,14 @@ function verifyLegacyDatabaseUpgrade() {
   fs.writeFileSync(rosterFile, '{"result":{"agents":[]}}');
   const env = { ...process.env, HERDR_PLUGIN_STATE_DIR: stateDir, HERDR_PLUGIN_CONFIG_DIR: configDir,
     HERDR_BIN_PATH: fakeHerdr, FAKE_CALLS: callsFile, FAKE_ROSTER: rosterFile };
-  const invoke = (entry, args) => spawnSync(process.execPath,
-    ['--no-warnings', '--experimental-sqlite', entry, ...args], { cwd: repo, env, encoding: 'utf8' });
-  assert.equal(invoke(required('LEGACY_ENTRY'), ['iam', 'upgrade-user']).status, 0);
-  assert.equal(invoke(required('LEGACY_ENTRY'), ['note', 'created by legacy']).status, 0);
-  const read = invoke(required('CURRENT_ENTRY'), ['notes', '--all', '--json']);
+  const run = (entry, args) => runProcess(entry, args, env);
+  assert.equal(run(legacyEntry, ['iam', 'upgrade-user']).status, 0);
+  assert.equal(run(legacyEntry, ['note', 'created by legacy']).status, 0);
+  const read = run(currentEntry, ['notes', '--all', '--json']);
   assert.equal(read.status, 0);
   assert.deepEqual(JSON.parse(read.stdout).map((row) => row.text), ['created by legacy']);
-  assert.equal(invoke(required('CURRENT_ENTRY'), ['note', 'created by TypeScript']).status, 0);
-  const reread = invoke(required('LEGACY_ENTRY'), ['notes', '--all', '--json']);
+  assert.equal(run(currentEntry, ['note', 'created by TypeScript']).status, 0);
+  const reread = run(legacyEntry, ['notes', '--all', '--json']);
   assert.equal(reread.status, 0);
   assert.deepEqual(JSON.parse(reread.stdout).map((row) => row.text), ['created by TypeScript', 'created by legacy']);
 }

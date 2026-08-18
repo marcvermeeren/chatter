@@ -15,7 +15,27 @@ CHATTER_ENTRY="${CHATTER_ENTRY:-$ROOT/dist/bin/chatter.js}"
 CHATTER_MODULE_ROOT="${CHATTER_MODULE_ROOT:-$ROOT/dist/src}"
 CHATTER_SOURCE_ROOT="${CHATTER_SOURCE_ROOT:-$ROOT}"
 CHATTER_SOURCE_EXT="${CHATTER_SOURCE_EXT:-ts}"
-CH="node --no-warnings --experimental-sqlite $CHATTER_ENTRY"
+chatter() {
+  node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+}
+chatter_with_home() (
+  home="$1"; shift
+  HOME="$home" node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+)
+fake_chatter() {
+  HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+}
+fake_chatter_with_roster() (
+  roster="$1"; shift
+  FAKE_ROSTER="$roster" HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+)
+fake_chatter_with_busy() (
+  busy="$1"; shift
+  FAKE_BUSY="$busy" HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+)
 PASS=0; FAIL=0
 ok()   { PASS=$((PASS+1)); echo "  ok   - $1"; }
 fail() { FAIL=$((FAIL+1)); echo "  FAIL - $1"; }
@@ -23,33 +43,37 @@ check() { # check <desc> <cmd...>
   desc="$1"; shift
   if "$@" >/dev/null 2>&1; then ok "$desc"; else fail "$desc"; fi
 }
+init_repo() {
+  mkdir -p "$1"
+  git -C "$1" init -q
+}
 
 REPO="$TMP/repo-a"
-mkdir -p "$REPO" && git -C "$REPO" init -q
+init_repo "$REPO"
 git -C "$REPO" -c user.email=t@t -c user.name=t commit --allow-empty -q -m init
 cd "$REPO"
 
 echo "# basics"
-check "iam sets human name"            $CH iam tester
-$CH whoami | grep -q tester && ok "whoami reports tester" || fail "whoami reports tester"
-check "note round-trip"                $CH note "hello world" --type discovery
-$CH notes hello | grep -q "hello world" && ok "notes search" || fail "notes search"
-check "question opens"                 $CH ask "what is up?"
-$CH questions | grep -q "what is up" && ok "questions lists open" || fail "questions lists open"
-QID=$($CH questions --json | node -e "console.log(JSON.parse(require('fs').readFileSync(0))[0].id)")
-check "question answered"              $CH answer "$QID" "not much"
-$CH agents --json | node -e "JSON.parse(require('fs').readFileSync(0))" && ok "--json parses" || fail "--json parses"
-$CH stats >/dev/null 2>&1 && ok "stats runs" || fail "stats runs"
-$CH search hello | grep -q "hello world" && ok "search alias matches notes" || fail "search alias matches notes"
+check "iam sets human name"            chatter iam tester
+chatter whoami | grep -q tester && ok "whoami reports tester" || fail "whoami reports tester"
+check "note round-trip"                chatter note "hello world" --type discovery
+chatter notes hello | grep -q "hello world" && ok "notes search" || fail "notes search"
+check "question opens"                 chatter ask "what is up?"
+chatter questions | grep -q "what is up" && ok "questions lists open" || fail "questions lists open"
+QID=$(chatter questions --json | node -e "console.log(JSON.parse(require('fs').readFileSync(0))[0].id)")
+check "question answered"              chatter answer "$QID" "not much"
+chatter agents --json | node -e "JSON.parse(require('fs').readFileSync(0))" && ok "--json parses" || fail "--json parses"
+chatter stats >/dev/null 2>&1 && ok "stats runs" || fail "stats runs"
+chatter search hello | grep -q "hello world" && ok "search alias matches notes" || fail "search alias matches notes"
 UNKNOWN_STDOUT="$TMP/unknown.stdout"; UNKNOWN_STDERR="$TMP/unknown.stderr"
-$CH definitely-not-a-command >"$UNKNOWN_STDOUT" 2>"$UNKNOWN_STDERR"; UNKNOWN_RC=$?
+chatter definitely-not-a-command >"$UNKNOWN_STDOUT" 2>"$UNKNOWN_STDERR"; UNKNOWN_RC=$?
 [ "$UNKNOWN_RC" = "1" ] && [ ! -s "$UNKNOWN_STDOUT" ] && grep -q 'unknown command' "$UNKNOWN_STDERR" \
   && ok "unknown command exits 1 on stderr only" || fail "unknown command exit/stream contract"
-HELP=$($CH help)
-[ "$HELP" = "$($CH -h)" ] && [ "$HELP" = "$($CH --help)" ] \
+HELP=$(chatter help)
+[ "$HELP" = "$(chatter -h)" ] && [ "$HELP" = "$(chatter --help)" ] \
   && ok "help aliases preserve concise help" || fail "help aliases preserve concise help"
-HELP_ALL=$($CH help --all)
-[ "$HELP_ALL" = "$($CH -h --all)" ] && [ "$HELP_ALL" = "$($CH --help --all)" ] \
+HELP_ALL=$(chatter help --all)
+[ "$HELP_ALL" = "$(chatter -h --all)" ] && [ "$HELP_ALL" = "$(chatter --help --all)" ] \
   && ok "help aliases preserve full help" || fail "help aliases preserve full help"
 [ "$(printf '%s\n' "$HELP" | wc -l | tr -d ' ')" -le 30 ] && echo "$HELP" | grep -q "chatter help --all" \
   && ok "concise help stays short and points to full help" || fail "concise help size or pointer"
@@ -58,112 +82,112 @@ echo "$HELP" | grep -q "chatter purge" && fail "concise help includes maintenanc
 printf '%s\n%s\n' "$HELP" "$HELP_ALL" | grep -Eq 'chatter\.db|tables: agents' \
   && fail "help exposes SQLite internals" || ok "help keeps SQLite internal"
 HELP_BAD_STDOUT="$TMP/help-bad.stdout"; HELP_BAD_STDERR="$TMP/help-bad.stderr"
-$CH help task >"$HELP_BAD_STDOUT" 2>"$HELP_BAD_STDERR"; HELP_BAD_RC=$?
+chatter help task >"$HELP_BAD_STDOUT" 2>"$HELP_BAD_STDERR"; HELP_BAD_RC=$?
 [ "$HELP_BAD_RC" = "1" ] && [ ! -s "$HELP_BAD_STDOUT" ] && grep -q 'usage: chatter help \[--all\]' "$HELP_BAD_STDERR" \
   && ok "invalid help arguments fail on stderr" || fail "invalid help argument contract"
 
 echo "# inbox + note lifecycle"
 BASIC_DB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)
 sqlite3 "$BASIC_DB" "INSERT INTO messages (from_agent,to_agent,body,kind,created_at) VALUES ('sender','tester','inbox contract','chat','2026-01-01 00:00:00')"
-$CH inbox --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); if(r.length!==1||r[0].body!=='inbox contract') process.exit(1)" \
+chatter inbox --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); if(r.length!==1||r[0].body!=='inbox contract') process.exit(1)" \
   && ok "inbox --json returns unread mail" || fail "inbox --json returns unread mail"
-$CH inbox | grep -q "no unread messages" && ok "reading inbox marks mail read" || fail "reading inbox marks mail read"
-$CH inbox --all | grep -q "inbox contract" && ok "inbox --all keeps history" || fail "inbox --all keeps history"
-RESOLVE_OUT=$($CH note "resolve lifecycle")
+chatter inbox | grep -q "no unread messages" && ok "reading inbox marks mail read" || fail "reading inbox marks mail read"
+chatter inbox --all | grep -q "inbox contract" && ok "inbox --all keeps history" || fail "inbox --all keeps history"
+RESOLVE_OUT=$(chatter note "resolve lifecycle")
 RESOLVE_ID=$(echo "$RESOLVE_OUT" | sed -n 's/^note #\([0-9][0-9]*\) saved$/\1/p')
-$CH resolve "$RESOLVE_ID" | grep -q "marked superseded" && ok "resolve supersedes an active note" || fail "resolve supersedes an active note"
-$CH notes "resolve lifecycle" | grep -q "no notes matching" && ok "resolved note leaves active search" || fail "resolved note leaves active search"
-$CH notes "resolve lifecycle" --all | grep -q "superseded" && ok "resolved note remains in all history" || fail "resolved note remains in all history"
+chatter resolve "$RESOLVE_ID" | grep -q "marked superseded" && ok "resolve supersedes an active note" || fail "resolve supersedes an active note"
+chatter notes "resolve lifecycle" | grep -q "no notes matching" && ok "resolved note leaves active search" || fail "resolved note leaves active search"
+chatter notes "resolve lifecycle" --all | grep -q "superseded" && ok "resolved note remains in all history" || fail "resolved note remains in all history"
 
-echo "# H2: 20 parallel task creates -> 20 unique ids, zero failures"
-i=1; while [ $i -le 20 ]; do $CH task create "concurrent $i" >/dev/null 2>&1 & i=$((i+1)); done; wait
-COUNT=$($CH task list --json | node -e "const t=JSON.parse(require('fs').readFileSync(0));console.log(t.length)")
-UNIQ=$($CH task list --json | node -e "const t=JSON.parse(require('fs').readFileSync(0));console.log(new Set(t.map(x=>x.id)).size)")
+echo "# parallel task creation"
+i=1; while [ $i -le 20 ]; do chatter task create "concurrent $i" >/dev/null 2>&1 & i=$((i+1)); done; wait
+COUNT=$(chatter task list --json | node -e "const t=JSON.parse(require('fs').readFileSync(0));console.log(t.length)")
+UNIQ=$(chatter task list --json | node -e "const t=JSON.parse(require('fs').readFileSync(0));console.log(new Set(t.map(x=>x.id)).size)")
 [ "$COUNT" = "20" ] && [ "$UNIQ" = "20" ] && ok "20 tasks, 20 unique ids" || fail "expected 20/20, got $COUNT/$UNIQ"
 
-echo "# L8: message content is preserved verbatim"
-$CH post "preserve --json please" >/dev/null 2>&1
-$CH chat --json | grep -q "preserve --json please" && ok "post keeps --json in body" || fail "post keeps --json in body"
-$CH send ghost "flags --queue-like --verbose inside" --queue >/dev/null 2>&1 \
-  && $CH log --grep verbose --json | grep -q "flags --queue-like --verbose inside" \
+echo "# message content is preserved verbatim"
+chatter post "preserve --json please" >/dev/null 2>&1
+chatter chat --json | grep -q "preserve --json please" && ok "post keeps --json in body" || fail "post keeps --json in body"
+chatter send ghost "flags --queue-like --verbose inside" --queue >/dev/null 2>&1 \
+  && chatter log --grep verbose --json | grep -q "flags --queue-like --verbose inside" \
   && ok "send body with flags survives (--queue trailing)" || fail "send body with flags survives"
 
-echo "# M7: assignee validated on create"
-$CH task create "typo test" --assignee does-not-exist >/dev/null 2>&1 && fail "ghost assignee accepted" || ok "ghost assignee refused"
+echo "# assignee validation"
+chatter task create "typo test" --assignee does-not-exist >/dev/null 2>&1 && fail "ghost assignee accepted" || ok "ghost assignee refused"
 
-echo "# M6: startup never clobbers a non-symlink"
+echo "# startup symlink safety"
 FAKEHOME="$TMP/home"; mkdir -p "$FAKEHOME/.local/bin"
 echo "#!/bin/sh" > "$FAKEHOME/.local/bin/chatter"; chmod +x "$FAKEHOME/.local/bin/chatter"
-HOME="$FAKEHOME" $CH _startup >/dev/null 2>&1
+chatter_with_home "$FAKEHOME" _startup >/dev/null 2>&1
 [ -L "$FAKEHOME/.local/bin/chatter" ] && fail "regular file was replaced" || ok "regular file left alone"
 LINKHOME="$TMP/linkhome"; mkdir -p "$LINKHOME/.local/bin"
-HOME="$LINKHOME" $CH _startup >/dev/null 2>&1
+chatter_with_home "$LINKHOME" _startup >/dev/null 2>&1
 [ -L "$LINKHOME/.local/bin/chatter" ] \
   && [ "$(readlink "$LINKHOME/.local/bin/chatter")" = "$ROOT/bin/chatter" ] \
   && [ -x "$LINKHOME/.local/bin/chatter" ] \
   && ok "startup symlink resolves to the executable root launcher" || fail "startup symlink target/executable contract"
 
-echo "# M5: iam refuses a registered agent name"
-sqlite3 "$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)" \
+echo "# registered handle protection"
+sqlite3 "$BASIC_DB" \
   "INSERT OR IGNORE INTO agents (name, registered_at, last_seen_at) VALUES ('takenname','x','x')" 2>/dev/null
-$CH iam takenname >/dev/null 2>&1 && fail "registered name adopted" || ok "registered agent name refused"
+chatter iam takenname >/dev/null 2>&1 && fail "registered name adopted" || ok "registered agent name refused"
 
 echo "# stale handle recovery"
-STALE_REPO="$TMP/stale-project"; mkdir -p "$STALE_REPO" && git -C "$STALE_REPO" init -q
-( cd "$STALE_REPO" && $CH note "stale universe" >/dev/null 2>&1 )
+STALE_REPO="$TMP/stale-project"; init_repo "$STALE_REPO"
+( cd "$STALE_REPO" && chatter note "stale universe" >/dev/null 2>&1 )
 STALE_DB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/stale-project-*/chatter.db)
 sqlite3 "$STALE_DB" "INSERT INTO agents (name,repo_root,registered_at,last_seen_at) VALUES ('stale','$STALE_REPO','x','x'); INSERT INTO messages (from_agent,to_agent,body,created_at,delivered_at) VALUES ('stale','tester','kept history','x','x')"
 cd "$REPO"
-STALE_OUT=$($CH spawn stale --kind codex 2>&1)
+STALE_OUT=$(chatter spawn stale --kind codex 2>&1)
 echo "$STALE_OUT" | grep -q 'registered in stale-project' \
   && echo "$STALE_OUT" | grep -q 'chatter forget stale' \
   && ok "stored collision names its repo and recovery command" || fail "stored collision guidance: $STALE_OUT"
-( cd "$STALE_REPO" && $CH forget stale >/dev/null 2>&1 )
+( cd "$STALE_REPO" && chatter forget stale >/dev/null 2>&1 )
 DEPARTED=$(sqlite3 "$STALE_DB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='stale'")
 HISTORY=$(sqlite3 "$STALE_DB" "SELECT COUNT(*) FROM messages WHERE body='kept history'")
 [ "$DEPARTED" = "1" ] && [ "$HISTORY" = "1" ] \
   && ok "forget frees a stale handle while retaining history" || fail "forget stale-handle contract"
-REUSE_OUT=$($CH spawn stale --kind codex 2>&1)
+REUSE_OUT=$(chatter spawn stale --kind codex 2>&1)
 echo "$REUSE_OUT" | grep -Eq 'registered in|live agent' \
   && fail "forgotten handle still blocked: $REUSE_OUT" || ok "forgotten handle passes spawn name preflight"
 
 echo "# repo isolation"
-REPO_B="$TMP/repo-b"; mkdir -p "$REPO_B" && git -C "$REPO_B" init -q
+REPO_B="$TMP/repo-b"; init_repo "$REPO_B"
 cd "$REPO_B"
-$CH notes 2>/dev/null | grep -q "hello world" && fail "repo B sees repo A notes" || ok "repo B is an empty universe"
+chatter notes 2>/dev/null | grep -q "hello world" && fail "repo B sees repo A notes" || ok "repo B is an empty universe"
 cd "$TMP"
-$CH notes >/dev/null 2>&1 && fail "runs outside a repo" || ok "refuses outside a git repo"
+chatter notes >/dev/null 2>&1 && fail "runs outside a repo" || ok "refuses outside a git repo"
 
 echo "# ledger + brief"
 cd "$REPO"
-DBFILE=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/*/chatter.db | head -1)
+DBFILE="$BASIC_DB"
 KINDS=$(sqlite3 "$DBFILE" "SELECT DISTINCT kind FROM events ORDER BY kind" | tr '\n' ' ')
 echo "$KINDS" | grep -q "task_created" && echo "$KINDS" | grep -q "question_opened" \
   && echo "$KINDS" | grep -q "question_answered" && echo "$KINDS" | grep -q "note_created" \
   && ok "ledger records events ($KINDS)" || fail "ledger missing kinds (got: $KINDS)"
-$CH task create "brief test task" >/dev/null 2>&1
-OUT=$($CH brief --json)
+chatter task create "brief test task" >/dev/null 2>&1
+OUT=$(chatter brief --json)
 echo "$OUT" | node -e "const b=JSON.parse(require('fs').readFileSync(0)); if(!Array.isArray(b.lines)||!b.lines.length) process.exit(1)" \
   && ok "brief --json returns lines" || fail "brief --json returns lines"
 echo "$OUT" | grep -q "brief test task" && ok "brief shows new task" || fail "brief shows new task"
 # The default-window call above advanced the caller's mark: the same task
 # must NOT reappear in the next default brief.
 sleep 1
-$CH brief | grep -q "brief test task" && fail "brief mark did not advance" || ok "brief mark advances (task not repeated)"
-$CH brief 2h | grep -q "brief test task" && ok "explicit window still sees it" || fail "explicit window still sees it"
+chatter brief | grep -q "brief test task" && fail "brief mark did not advance" || ok "brief mark advances (task not repeated)"
+chatter brief 2h | grep -q "brief test task" && ok "explicit window still sees it" || fail "explicit window still sees it"
 
 echo "# data + purge"
 cd "$REPO"
-$CH data | grep -q "repo-a" && ok "data lists universes" || fail "data lists universes"
-$CH purge repo-a | grep -q "would delete" && ok "purge defaults to dry run" || fail "purge defaults to dry run"
-$CH data | grep -q "repo-a" && ok "dry run deleted nothing" || fail "dry run deleted nothing"
-REPO_C="$TMP/repo-c"; mkdir -p "$REPO_C" && git -C "$REPO_C" init -q
-( cd "$REPO_C" && $CH note "orphan bait" >/dev/null 2>&1 )
+chatter data | grep -q "repo-a" && ok "data lists universes" || fail "data lists universes"
+chatter purge repo-a | grep -q "would delete" && ok "purge defaults to dry run" || fail "purge defaults to dry run"
+chatter data | grep -q "repo-a" && ok "dry run deleted nothing" || fail "dry run deleted nothing"
+REPO_C="$TMP/repo-c"; init_repo "$REPO_C"
+( cd "$REPO_C" && chatter note "orphan bait" >/dev/null 2>&1 )
 rm -rf "$REPO_C"
-$CH data | grep -q "ORPHAN" && ok "orphan detected" || fail "orphan detected"
-$CH purge --orphans --yes | grep -q "deleted" && ok "orphan purged" || fail "orphan purged"
-$CH data | grep -q "ORPHAN" && fail "orphan still listed" || ok "orphan gone from data"
-$CH purge --older-than 0h --yes >/dev/null 2>&1 && ok "older-than trim runs" || fail "older-than trim runs"
+chatter data | grep -q "ORPHAN" && ok "orphan detected" || fail "orphan detected"
+chatter purge --orphans --yes | grep -q "deleted" && ok "orphan purged" || fail "orphan purged"
+chatter data | grep -q "ORPHAN" && fail "orphan still listed" || ok "orphan gone from data"
+chatter purge --older-than 0h --yes >/dev/null 2>&1 && ok "older-than trim runs" || fail "older-than trim runs"
 
 echo "# behavioral isolation (fake herdr: agents live in two repos)"
 export FAKE_CALLS="$TMP/herdr-calls.log"
@@ -178,24 +202,23 @@ cat > "$FAKE_ROSTER" <<EOF
 ]}}
 EOF
 # 'moved' registered in repo A historically, but its pane now works in repo B.
-ADB=$(ls "$HERDR_PLUGIN_STATE_DIR"/repos/repo-a-*/chatter.db)
+ADB="$BASIC_DB"
 sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,cwd,repo_root,registered_at,last_seen_at) VALUES ('moved','w1:p3','$REPO','$REPO','x','x')"
 cd "$REPO"
-CHF="env HERDR_BIN_PATH=$ROOT/test/fake-herdr node --no-warnings --experimental-sqlite $CHATTER_ENTRY"
-OUT=$($CHF agents)
+OUT=$(fake_chatter agents)
 echo "$OUT" | grep -q "alpha" && ok "roster shows in-repo live agent" || fail "roster shows in-repo live agent"
 echo "$OUT" | grep -q "beta" && fail "roster leaks other repo's agent" || ok "roster excludes other repo's agent"
 echo "$OUT" | grep "moved" | grep -q "offline" && ok "moved-away agent shows offline, not live" || fail "moved-away agent shows offline"
-LIVE_COLLISION=$($CHF spawn alpha --kind codex 2>&1)
+LIVE_COLLISION=$(fake_chatter spawn alpha --kind codex 2>&1)
 echo "$LIVE_COLLISION" | grep -q 'live agent' \
   && ! echo "$LIVE_COLLISION" | grep -q 'chatter forget' \
   && ok "live collision does not suggest forgetting" || fail "live collision guidance: $LIVE_COLLISION"
-$CHF send beta "hi" >/dev/null 2>&1 && fail "send to other-repo agent accepted" || ok "send to other-repo agent refused"
+fake_chatter send beta "hi" >/dev/null 2>&1 && fail "send to other-repo agent accepted" || ok "send to other-repo agent refused"
 : > "$FAKE_CALLS"
-$CHF send moved "hi" 2>/dev/null | grep -q queued && ok "send to moved-away agent queues" || fail "send to moved-away agent queues"
-grep -q "agent prompt" "$FAKE_CALLS" && fail "H1 REGRESSION: injected into moved-away agent" || ok "no injection to moved-away agent (H1)"
+fake_chatter send moved "hi" 2>/dev/null | grep -q queued && ok "send to moved-away agent queues" || fail "send to moved-away agent queues"
+grep -q "agent prompt" "$FAKE_CALLS" && fail "injected into moved-away agent" || ok "no injection to moved-away agent"
 : > "$FAKE_CALLS"
-$CHF send alpha "hi" 2>/dev/null | grep -q delivered && ok "send to in-repo agent delivers" || fail "send to in-repo agent delivers"
+fake_chatter send alpha "hi" 2>/dev/null | grep -q delivered && ok "send to in-repo agent delivers" || fail "send to in-repo agent delivers"
 grep -q "agent prompt w1:p1" "$FAKE_CALLS" && ok "prompt went to alpha's pane" || fail "prompt went to alpha's pane"
 BLOCKED_ROSTER="$TMP/blocked-roster.json"
 cat > "$BLOCKED_ROSTER" <<EOF
@@ -206,18 +229,18 @@ EOF
 # The same stored DM must render identically whether delivered immediately or
 # after waiting in the queue. Alpha already received "hi", so help is absent.
 : > "$FAKE_CALLS"
-$CHF send alpha "parity footer" >/dev/null 2>&1
+fake_chatter send alpha "parity footer" >/dev/null 2>&1
 IMMEDIATE_FOOTER=$(grep -A1 '^agent prompt w1:p1 ' "$FAKE_CALLS" | tail -n 2)
 : > "$FAKE_CALLS"
-FAKE_ROSTER="$BLOCKED_ROSTER" $CHF send alpha "parity footer" >/dev/null 2>&1
-$CHF _flush >/dev/null 2>&1
+fake_chatter_with_roster "$BLOCKED_ROSTER" send alpha "parity footer" >/dev/null 2>&1
+fake_chatter _flush >/dev/null 2>&1
 QUEUED_FOOTER=$(grep -A1 '^agent prompt w1:p1 ' "$FAKE_CALLS" | tail -n 2)
 [ "$IMMEDIATE_FOOTER" = "$QUEUED_FOOTER" ] \
   && echo "$IMMEDIATE_FOOTER" | grep -Fqx '(reply: chatter send tester "...")' \
   && ok "immediate and queued delivery use the same contextual footer" \
   || fail "immediate/queued footer mismatch"
 : > "$FAKE_CALLS"
-FAKE_ROSTER="$BLOCKED_ROSTER" $CHF send alpha "wait for approval" 2>/dev/null | grep -q queued \
+fake_chatter_with_roster "$BLOCKED_ROSTER" send alpha "wait for approval" 2>/dev/null | grep -q queued \
   && ok "blocked target queues delivery" || fail "blocked target queues delivery"
 grep -q "agent prompt" "$FAKE_CALLS" && fail "blocked target was prompted" || ok "blocked target is never prompted"
 FUTURE_ROSTER="$TMP/future-roster.json"
@@ -227,94 +250,94 @@ cat > "$FUTURE_ROSTER" <<EOF
 ]}}
 EOF
 : > "$FAKE_CALLS"
-FAKE_ROSTER="$FUTURE_ROSTER" $CHF send alpha "unknown status safety" 2>/dev/null | grep -q queued \
+fake_chatter_with_roster "$FUTURE_ROSTER" send alpha "unknown status safety" 2>/dev/null | grep -q queued \
   && ! grep -q "agent prompt" "$FAKE_CALLS" \
   && ok "unrecognized agent status fails closed" || fail "unrecognized agent status was injected into"
-$CHF _flush >/dev/null 2>&1
+fake_chatter _flush >/dev/null 2>&1
 grep -q "agent prompt w1:p1" "$FAKE_CALLS" && ok "flush delivers after target settles" || fail "flush delivers after target settles"
 : > "$FAKE_CALLS"
-$CHF post "@everyone hello" >/dev/null 2>&1
+fake_chatter post "@everyone hello" >/dev/null 2>&1
 grep -c "agent prompt" "$FAKE_CALLS" | grep -qx "1" && grep -q "agent prompt w1:p1" "$FAKE_CALLS" \
   && ok "@everyone reaches only this repo's team" || fail "@everyone crossed the repo boundary"
-$CHF brief 1h 2>/dev/null | grep -q "agents: 1 idle" && ok "brief counts this repo's team only" || fail "brief counts this repo's team only"
+fake_chatter brief 1h 2>/dev/null | grep -q "agents: 1 idle" && ok "brief counts this repo's team only" || fail "brief counts this repo's team only"
 
 echo "# task transitions + structured handoff"
-FLOW_ID=$($CHF task create "handoff contract" | awk '{print $1}')
-$CHF task assign "$FLOW_ID" alpha >/dev/null 2>&1
-$CHF task list --json | FLOW_ID="$FLOW_ID" node -e "const r=JSON.parse(require('fs').readFileSync(0)); const t=r.find(x=>x.id===process.env.FLOW_ID); if(!t||t.assignee!=='alpha'||t.status!=='in_progress') process.exit(1)" \
+FLOW_ID=$(fake_chatter task create "handoff contract" | awk '{print $1}')
+fake_chatter task assign "$FLOW_ID" alpha >/dev/null 2>&1
+fake_chatter task list --json | FLOW_ID="$FLOW_ID" node -e "const r=JSON.parse(require('fs').readFileSync(0)); const t=r.find(x=>x.id===process.env.FLOW_ID); if(!t||t.assignee!=='alpha'||t.status!=='in_progress') process.exit(1)" \
   && ok "task assign updates owner and status" || fail "task assign updates owner and status"
-HANDOFF_OUT=$($CHF handoff "$FLOW_ID" alpha --summary "continue the migration" --branch agents/alpha --commit abcdef123456 --files src/a.js,src/b.js --tests "sh test/smoke.sh" --next "finish it")
+HANDOFF_OUT=$(fake_chatter handoff "$FLOW_ID" alpha --summary "continue the migration" --branch agents/alpha --commit abcdef123456 --files src/a.js,src/b.js --tests "sh test/smoke.sh" --next "finish it")
 HANDOFF_ID=$(echo "$HANDOFF_OUT" | sed -n 's/^h\([0-9][0-9]*\) created.*/\1/p')
-$CHF handoff show "$HANDOFF_ID" | FLOW_ID="$FLOW_ID" node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.task!==process.env.FLOW_ID||h.to!=='alpha'||h.summary!=='continue the migration'||h.files.length!==2||h.status!=='pending') process.exit(1)" \
+fake_chatter handoff show "$HANDOFF_ID" | FLOW_ID="$FLOW_ID" node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.task!==process.env.FLOW_ID||h.to!=='alpha'||h.summary!=='continue the migration'||h.files.length!==2||h.status!=='pending') process.exit(1)" \
   && ok "handoff show preserves structured payload" || fail "handoff show preserves structured payload"
-$CHF task done "$FLOW_ID" --commit fedcba987654 >/dev/null 2>&1
-$CHF handoff show "$HANDOFF_ID" | node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.status!=='done') process.exit(1)" \
+fake_chatter task done "$FLOW_ID" --commit fedcba987654 >/dev/null 2>&1
+fake_chatter handoff show "$HANDOFF_ID" | node -e "const h=JSON.parse(require('fs').readFileSync(0)); if(h.status!=='done') process.exit(1)" \
   && ok "task completion closes its handoff" || fail "task completion closes its handoff"
-TASK_LOG_COUNT=$($CHF log --task "$FLOW_ID" --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
+TASK_LOG_COUNT=$(fake_chatter log --task "$FLOW_ID" --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
 [ "$TASK_LOG_COUNT" -ge 1 ] && ok "log --task filters by task reference" || fail "log --task filters by task reference"
-LIMIT_LOG_COUNT=$($CHF log --limit 1 --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
-ALL_LOG_COUNT=$($CHF log --all --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
+LIMIT_LOG_COUNT=$(fake_chatter log --limit 1 --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
+ALL_LOG_COUNT=$(fake_chatter log --all --json | node -e "const r=JSON.parse(require('fs').readFileSync(0)); console.log(r.length)")
 [ "$LIMIT_LOG_COUNT" = "1" ] && [ "$ALL_LOG_COUNT" -gt "$LIMIT_LOG_COUNT" ] \
   && ok "log --limit and --all control history size" || fail "log --limit/--all history contract"
 
 echo "# task-scoped notes"
-MEM_ID=$($CHF task create "memory ordering" | awk '{print $1}')
-$CHF note "dead path" --type dead-end --task "$MEM_ID" >/dev/null
-$CHF note "chosen path" --type decision --task "$MEM_ID" >/dev/null
-$CHF note "needle discovery" --type discovery --task "$MEM_ID" >/dev/null
+MEM_ID=$(fake_chatter task create "memory ordering" | awk '{print $1}')
+fake_chatter note "dead path" --type dead-end --task "$MEM_ID" >/dev/null
+fake_chatter note "chosen path" --type decision --task "$MEM_ID" >/dev/null
+fake_chatter note "needle discovery" --type discovery --task "$MEM_ID" >/dev/null
 for i in 1 2 3 4 5 6 7 8 9; do
-  $CHF note "ordinary context $i" --task "$MEM_ID" >/dev/null
+  fake_chatter note "ordinary context $i" --task "$MEM_ID" >/dev/null
 done
-STALE_ID=$($CHF note "stale dead end" --type dead-end --task "$MEM_ID" | sed -n 's/note #\([0-9][0-9]*\) saved/\1/p')
-$CHF resolve "$STALE_ID" >/dev/null
-TASK_NOTES=$($CHF notes --task "$MEM_ID" --json)
+STALE_ID=$(fake_chatter note "stale dead end" --type dead-end --task "$MEM_ID" | sed -n 's/note #\([0-9][0-9]*\) saved/\1/p')
+fake_chatter resolve "$STALE_ID" >/dev/null
+TASK_NOTES=$(fake_chatter notes --task "$MEM_ID" --json)
 echo "$TASK_NOTES" | MEM_ID="$MEM_ID" node -e '
 const rows=JSON.parse(require("fs").readFileSync(0));
 const rank={"dead-end":0,decision:1,discovery:2};
 if(rows.length!==10||rows.some(r=>r.task_id!==process.env.MEM_ID||r.status!=="active"))process.exit(1);
 for(let i=1;i<rows.length;i++)if((rank[rows[i-1].type]??3)>(rank[rows[i].type]??3))process.exit(1);
 ' && ok "notes --task caps and prioritizes active task memory" || fail "notes --task ordering/cap"
-$CHF notes needle --task "$MEM_ID" --json | node -e '
+fake_chatter notes needle --task "$MEM_ID" --json | node -e '
 const rows=JSON.parse(require("fs").readFileSync(0));
 if(rows.length!==1||rows[0].text!=="needle discovery")process.exit(1);
 ' && ok "notes --task composes with text search" || fail "notes --task query composition"
-$CHF notes --task "$MEM_ID" --all --json | node -e '
+fake_chatter notes --task "$MEM_ID" --all --json | node -e '
 const rows=JSON.parse(require("fs").readFileSync(0));
 if(!rows.some(r=>r.text==="stale dead end"&&r.status==="superseded"))process.exit(1);
 ' && ok "notes --task --all includes inactive memory" || fail "notes --task --all inactive memory"
 
 echo "# spawn v2: worktree default, --tab explicit"
 : > "$FAKE_CALLS"
-OUT=$($CHF spawn helper2 --kind pi 2>&1)
+OUT=$(fake_chatter spawn helper2 --kind pi 2>&1)
 grep -q "worktree create --cwd" "$FAKE_CALLS" && grep -q "branch agents/helper2" "$FAKE_CALLS" \
   && ok "spawn creates a worktree on agents/<handle>" || fail "spawn creates a worktree"
 grep -q "tab create" "$FAKE_CALLS" && fail "worktree spawn also made a tab" || ok "no tab for worktree spawn"
 grep -q "agent start helper2" "$FAKE_CALLS" && ok "agent started in worktree pane" || fail "agent started in worktree pane"
 echo "$OUT" | grep -q "new worktree" && ok "output names the worktree setup" || fail "output names the worktree setup"
 # Commitless repo: worktree spawn must refuse with guidance, not a raw git error.
-REPO_EMPTY="$TMP/repo-empty"; mkdir -p "$REPO_EMPTY" && git -C "$REPO_EMPTY" init -q
-( cd "$REPO_EMPTY" && $CHF spawn babyagent --kind pi 2>&1 | grep -q "no commits yet" ) \
+REPO_EMPTY="$TMP/repo-empty"; init_repo "$REPO_EMPTY"
+( cd "$REPO_EMPTY" && fake_chatter spawn babyagent --kind pi 2>&1 | grep -q "no commits yet" ) \
   && ok "commitless repo gets a clear spawn refusal" || fail "commitless repo spawn message"
-( cd "$REPO_EMPTY" && : > "$FAKE_CALLS"; $CHF spawn babyagent --kind pi >/dev/null 2>&1; \
+( cd "$REPO_EMPTY" && : > "$FAKE_CALLS"; fake_chatter spawn babyagent --kind pi >/dev/null 2>&1; \
   grep -q "worktree create" "$FAKE_CALLS" ) && fail "worktree create attempted on unborn HEAD" || ok "no worktree attempted on unborn HEAD"
 
 # Shell-not-ready race: two busy refusals, then success — spawn must retry.
 echo 2 > "$TMP/busy-count"
 : > "$FAKE_CALLS"
-FAKE_BUSY="$TMP/busy-count" $CHF spawn helper4 --kind pi >/dev/null 2>&1 \
+fake_chatter_with_busy "$TMP/busy-count" spawn helper4 --kind pi >/dev/null 2>&1 \
   && ok "spawn retries through agent_pane_busy" || fail "spawn retries through agent_pane_busy"
 STARTS=$(grep -c "agent start helper4" "$FAKE_CALLS")
 [ "$STARTS" = "3" ] && ok "retried exactly until the shell was ready ($STARTS starts)" || fail "unexpected retry count: $STARTS"
 : > "$FAKE_CALLS"
-$CHF spawn helper3 --kind pi --tab >/dev/null 2>&1
+fake_chatter spawn helper3 --kind pi --tab >/dev/null 2>&1
 grep -q "tab create" "$FAKE_CALLS" && ok "--tab uses same-checkout tab" || fail "--tab uses same-checkout tab"
 grep -q "worktree create" "$FAKE_CALLS" && fail "--tab still made a worktree" || ok "--tab made no worktree"
 
 echo "# role: display label via chatter"
 : > "$FAKE_CALLS"
-$CHF role alpha "Data / API" >/dev/null 2>&1
+fake_chatter role alpha "Data / API" >/dev/null 2>&1
 grep -q "pane rename w1:p1 Data / API" "$FAKE_CALLS" && ok "role renames the pane through herdr" || fail "role renames the pane"
-$CHF agents | grep -q "Data / API · @alpha" && ok "roster shows display · @handle" || fail "roster shows display · @handle"
+fake_chatter agents | grep -q "Data / API · @alpha" && ok "roster shows display · @handle" || fail "roster shows display · @handle"
 # 'moved' is registered in repo A, so it resolves — the permission check must fire.
 ROLE_OUT=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" role moved "Sneaky retitle" 2>&1)
 echo "$ROLE_OUT" | grep -q "only set their own" && ok "agent cannot retitle a teammate" || fail "agent retitle not blocked: $ROLE_OUT"
@@ -322,25 +345,28 @@ echo "$ROLE_OUT" | grep -q "only set their own" && ok "agent cannot retitle a te
 ROLE_OUT2=$(HERDR_PANE_ID=w1:p1 env HERDR_BIN_PATH="$ROOT/test/fake-herdr" FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" role beta "x" 2>&1)
 echo "$ROLE_OUT2" | grep -q "no agent" && ok "cross-repo retitle blocked by the boundary" || fail "cross-repo retitle: $ROLE_OUT2"
 echo "# departure: reap, forget, and departed exclusion"
-$CHF send moved "will be stuck" --queue >/dev/null 2>&1
+fake_chatter send moved "will be stuck" --queue >/dev/null 2>&1
 env HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w1:p3"}' HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
   FAKE_CALLS="$FAKE_CALLS" FAKE_ROSTER="$FAKE_ROSTER" HERDR_PLUGIN_STATE_DIR="$HERDR_PLUGIN_STATE_DIR" \
   node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" _reap | grep -q "departed" && ok "_reap marks the closed pane's agent departed" || fail "_reap marks departed"
-$CHF agents | grep -q "moved" && fail "departed agent still in default roster" || ok "departed agent hidden from roster"
-$CHF agents --all | grep "moved" | grep -q "departed" && ok "--all shows it as departed" || fail "--all shows departed"
-$CHF send moved "hi again" >/dev/null 2>&1 && fail "send to departed accepted without --queue" || ok "send to departed refused"
-$CHF brief 1h | grep -q "queued for departed" && ok "brief flags stuck mail" || fail "brief flags stuck mail"
-$CHF forget moved | grep -q "dropped" && ok "forget drops queued mail" || fail "forget drops queued mail"
-$CHF brief 1h | grep -q "queued for departed" && fail "stuck-mail flag persists after forget" || ok "stuck-mail flag cleared"
+fake_chatter agents | grep -q "moved" && fail "departed agent still in default roster" || ok "departed agent hidden from roster"
+fake_chatter agents --all | grep "moved" | grep -q "departed" && ok "--all shows it as departed" || fail "--all shows departed"
+fake_chatter send moved "hi again" >/dev/null 2>&1 && fail "send to departed accepted without --queue" || ok "send to departed refused"
+fake_chatter brief 1h | grep -q "queued for departed" && ok "brief flags stuck mail" || fail "brief flags stuck mail"
+fake_chatter forget moved | grep -q "dropped" && ok "forget drops queued mail" || fail "forget drops queued mail"
+fake_chatter brief 1h | grep -q "queued for departed" && fail "stuck-mail flag persists after forget" || ok "stuck-mail flag cleared"
 # Workspace-level teardown (worktree.removed carries only the workspace id) —
 # and one closed pane must never reap the whole workspace.
 sqlite3 "$ADB" "INSERT OR REPLACE INTO agents (name,pane_id,registered_at,last_seen_at) VALUES ('gamma','w7:p1','x','x'),('delta','w7:p2','x','x')"
-REAP="env HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$FAKE_CALLS FAKE_ROSTER=$FAKE_ROSTER HERDR_PLUGIN_STATE_DIR=$HERDR_PLUGIN_STATE_DIR node --no-warnings --experimental-sqlite $CHATTER_ENTRY _reap"
-env HERDR_PLUGIN_EVENT="pane.closed" HERDR_PLUGIN_EVENT_JSON='{"type":"pane_closed","pane_id":"w7:p1","workspace_id":"w7"}' $REAP >/dev/null
+reap() {
+  HERDR_PLUGIN_EVENT="$1" HERDR_PLUGIN_EVENT_JSON="$2" HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" _reap
+}
+reap "pane.closed" '{"type":"pane_closed","pane_id":"w7:p1","workspace_id":"w7"}' >/dev/null
 G=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='gamma'")
 D=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delta'")
 [ "$G" = "1" ] && [ "$D" = "0" ] && ok "pane.closed reaps only its own pane" || fail "pane.closed overreach (gamma=$G delta=$D)"
-env HERDR_PLUGIN_EVENT="worktree.removed" HERDR_PLUGIN_EVENT_JSON='{"type":"worktree_removed","workspace_id":"w7","worktree":{"path":"/x"}}' $REAP | grep -q departed \
+reap "worktree.removed" '{"type":"worktree_removed","workspace_id":"w7","worktree":{"path":"/x"}}' | grep -q departed \
   && ok "worktree.removed reaps by workspace id" || fail "worktree.removed reaps by workspace id"
 D2=$(sqlite3 "$ADB" "SELECT departed_at IS NOT NULL FROM agents WHERE name='delta'")
 [ "$D2" = "1" ] && ok "workspace teardown retired the remaining agent" || fail "workspace teardown retired delta"
@@ -365,7 +391,7 @@ grep -rn 'liveAgents(' "$ROOT/src" "$ROOT/bin" >/dev/null 2>&1 \
   && fail "old liveAgents() name still referenced" || ok "old liveAgents() name fully retired"
 
 echo "# help logo is TTY-only (agents pipe help constantly)"
-HELP_OUT=$($CH help)   # command substitution => stdout is a pipe, not a TTY
+HELP_OUT=$(chatter help)   # command substitution => stdout is a pipe, not a TTY
 echo "$HELP_OUT" | grep -q "$(printf '\033')" && fail "piped help emits escape sequences" || ok "piped help is escape-free"
 echo "$HELP_OUT" | grep -q '▄' && fail "piped help includes the block logo" || ok "piped help has no block art"
 echo "$HELP_OUT" | grep -q "chatter agents" && ok "piped help still lists commands" || fail "piped help lists commands"
@@ -402,11 +428,15 @@ node --no-warnings --experimental-sqlite -e "const c=require('$CHATTER_MODULE_RO
 ACTION_CALLS="$TMP/action-calls.log"; : > "$ACTION_CALLS"
 ACTION_CONTEXT="{\"workspace_id\":\"w1\",\"focused_pane_id\":\"w1:p1\",\"focused_pane_cwd\":\"$REPO\"}"
 ACTION_REPO=$(cd "$REPO" && pwd -P)
-ACTION_CH="env HERDR_PLUGIN_CONTEXT_JSON=$ACTION_CONTEXT HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$ACTION_CALLS FAKE_ROSTER=$TMP/roster.json node --no-warnings --experimental-sqlite $CHATTER_ENTRY"
-$ACTION_CH _open_board >/dev/null 2>&1
-$ACTION_CH _open_board_tab >/dev/null 2>&1
-$ACTION_CH _open_chat >/dev/null 2>&1
-$ACTION_CH _open_chat_tab >/dev/null 2>&1
+action_chatter() {
+  HERDR_PLUGIN_CONTEXT_JSON="$ACTION_CONTEXT" HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    FAKE_CALLS="$ACTION_CALLS" FAKE_ROSTER="$TMP/roster.json" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+}
+action_chatter _open_board >/dev/null 2>&1
+action_chatter _open_board_tab >/dev/null 2>&1
+action_chatter _open_chat >/dev/null 2>&1
+action_chatter _open_chat_tab >/dev/null 2>&1
 ACTION_REPO_ARG="--env CHATTER_REPO_ROOT=$ACTION_REPO"
 ACTION_TAB_ARGS="--placement tab --workspace w1 $ACTION_REPO_ARG"
 grep -qx "plugin pane open --plugin chatter --entrypoint board $ACTION_REPO_ARG" "$ACTION_CALLS" \
@@ -437,7 +467,7 @@ grep -q '^agent rename w7:p9 ' "$UNNAMED_CALLS" && echo "$UNNAMED_OUT" | grep -q
   && ok "unnamed agent pane is auto-named and remains an agent" || fail "unnamed agent identity fallback"
 
 echo "# spawn (failure path — no herdr available here)"
-$CH spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
+chatter spawn helper --kind codex >/dev/null 2>&1 && fail "spawn succeeded without herdr?" || ok "spawn fails gracefully without herdr"
 
 echo "# update: linked checkout (a throwaway fixture — never this repo)"
 UPD="$TMP/upd"; UPDHOME="$TMP/updhome"; UPDCALLS="$TMP/upd-calls.log"
@@ -514,20 +544,25 @@ echo "# update: CLI wrapper reads the registry, humans only"
 cat > "$TMP/plugins-local.json" <<EOF
 {"result":{"plugins":[{"plugin_id":"chatter","version":"0.2.0","plugin_root":"$UPD/root","source":{"kind":"local"}}]}}
 EOF
-UPDCLI="env HOME=$UPDHOME HERDR_BIN_PATH=$ROOT/test/fake-herdr FAKE_CALLS=$UPDCALLS FAKE_ROSTER=$TMP/roster.json FAKE_PLUGINS=$TMP/plugins-local.json"
-$UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" update --check 2>&1 | grep -q "up to date" \
+update_chatter() (
+  pane_id="$1"; shift
+  HOME="$UPDHOME" HERDR_PANE_ID="$pane_id" HERDR_BIN_PATH="$ROOT/test/fake-herdr" \
+    FAKE_CALLS="$UPDCALLS" FAKE_ROSTER="$TMP/roster.json" FAKE_PLUGINS="$TMP/plugins-local.json" \
+    node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" "$@"
+)
+update_chatter "" update --check 2>&1 | grep -q "up to date" \
   && ok "chatter update --check runs off the registry" || fail "chatter update --check off the registry"
-AG_OUT=$(HERDR_PANE_ID=w1:p1 $UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" update 2>&1)
+AG_OUT=$(update_chatter w1:p1 update 2>&1)
 echo "$AG_OUT" | grep -q "human-only" && ok "agents cannot update the plugin" || fail "agent update not blocked: $AG_OUT"
-$UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" doctor 2>&1 | grep -q "chatter is up to date" \
+update_chatter "" doctor 2>&1 | grep -q "chatter is up to date" \
   && ok "doctor reports update state as a note" || fail "doctor reports update state"
-$UPDCLI node --no-warnings --experimental-sqlite "$CHATTER_ENTRY" help --all | grep -q "chatter update" \
+update_chatter "" help --all | grep -q "chatter update" \
   && ok "help documents update" || fail "help documents update"
 
 echo "# setup --yes + doctor"
 SETHOME="$TMP/sethome"; mkdir -p "$SETHOME/.config/herdr" "$SETHOME/.local/bin"
 cd "$REPO"
-HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1 && ok "setup --yes runs" || fail "setup --yes runs"
+chatter_with_home "$SETHOME" setup --yes --name smoketester >/dev/null 2>&1 && ok "setup --yes runs" || fail "setup --yes runs"
 grep -q 'ui.toast' "$SETHOME/.config/herdr/config.toml" && ok "toast block written" || fail "toast block written"
 grep -q 'chatter.open-chat' "$SETHOME/.config/herdr/config.toml" && ok "keybinding written" || fail "keybinding written"
 grep -q 'command = "chatter.open-chat-tab"' "$SETHOME/.config/herdr/config.toml" \
@@ -542,7 +577,7 @@ grep -q 'command = "chatter.open-board-tab"' "$SETHOME/.config/herdr/config.toml
   && ok "board tab keybinding written" || fail "board tab keybinding written"
 grep -q 'key = "prefix+alt+shift+b"' "$SETHOME/.config/herdr/config.toml" \
   && ok "board tab keybinding uses prefix+alt+shift+b" || fail "board tab keybinding uses prefix+alt+shift+b"
-HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
+chatter_with_home "$SETHOME" setup --yes --name smoketester >/dev/null 2>&1
 N=$(grep -c 'ui.toast' "$SETHOME/.config/herdr/config.toml")
 [ "$N" = "1" ] && ok "setup is idempotent (no duplicate blocks)" || fail "duplicate blocks after rerun ($N)"
 NC=$(grep -c 'command = "chatter.open-chat"' "$SETHOME/.config/herdr/config.toml")
@@ -557,34 +592,34 @@ NBT=$(grep -c 'command = "chatter.open-board-tab"' "$SETHOME/.config/herdr/confi
 CONFHOME="$TMP/confhome"; mkdir -p "$CONFHOME/.config/herdr" "$CONFHOME/.local/bin"
 printf '[[keys.command]]\nkey = "prefix+alt+t"\ntype = "spawn_tab"\ndescription = "mine"\n' \
   > "$CONFHOME/.config/herdr/config.toml"
-CONF_OUT=$(HOME="$CONFHOME" $CH setup --yes --name smoketester 2>&1)
+CONF_OUT=$(chatter_with_home "$CONFHOME" setup --yes --name smoketester 2>&1)
 echo "$CONF_OUT" | grep -q 'already in use' && ok "occupied tab key is reported, not stolen" || fail "occupied tab key not reported"
 grep -q 'chatter.open-chat-tab' "$CONFHOME/.config/herdr/config.toml" && fail "tab binding written over an occupied key" || ok "tab binding skipped when its key is taken"
 grep -q 'command = "chatter.open-chat"' "$CONFHOME/.config/herdr/config.toml" \
   && ok "popup binding still written despite the tab conflict" || fail "popup binding blocked by tab conflict"
 grep -q 'type = "spawn_tab"' "$CONFHOME/.config/herdr/config.toml" && ok "the other owner's binding survived" || fail "existing binding clobbered"
 printf '[ui.toast]\ndelivery = "off"\n' > "$SETHOME/.config/herdr/config.toml"
-HOME="$SETHOME" $CH setup --yes --name smoketester >/dev/null 2>&1
+chatter_with_home "$SETHOME" setup --yes --name smoketester >/dev/null 2>&1
 grep -q 'delivery = "off"' "$SETHOME/.config/herdr/config.toml" && ok "existing [ui.toast] respected" || fail "existing [ui.toast] overwritten"
-$CH doctor >/dev/null 2>&1; RC=$?
+chatter doctor >/dev/null 2>&1; RC=$?
 [ "$RC" = "0" ] || [ "$RC" = "1" ] && ok "doctor runs (exit $RC)" || fail "doctor crashed"
 # Both bindings reported, each judged on its own config.
-HOME="$SETHOME" $CH doctor 2>&1 | grep -q "chat tab keybinding bound" \
+chatter_with_home "$SETHOME" doctor 2>&1 | grep -q "chat tab keybinding bound" \
   && ok "doctor confirms a bound tab keybinding" || fail "doctor confirms a bound tab keybinding"
-HOME="$CONFHOME" $CH doctor 2>&1 | grep -q "chat tab keybinding not bound" \
+chatter_with_home "$CONFHOME" doctor 2>&1 | grep -q "chat tab keybinding not bound" \
   && ok "doctor notes a missing tab keybinding" || fail "doctor notes a missing tab keybinding"
 # A missing tab binding is a note, not a problem: it must not fail doctor on
 # its own — CONFHOME has the popup binding written, so the tab line is the
 # only keybinding-related difference.
-HOME="$CONFHOME" $CH doctor 2>&1 | grep -q "✗.*chat tab keybinding" \
+chatter_with_home "$CONFHOME" doctor 2>&1 | grep -q "✗.*chat tab keybinding" \
   && fail "missing tab binding rendered as a failure" || ok "missing tab binding is hint-level, not a failure"
 
 echo "# help documents how to open the chat"
-$CH help --all | grep -q "chatter.open-chat-tab" && ok "full help names the tab action" || fail "full help names the tab action"
-$CH help --all | grep -q "placement split" && ok "full help names --placement split" || fail "full help names --placement split"
-$CH help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
-$CH help | grep -q "prefix+alt+b" && ok "help names the board keybinding" || fail "help names the board keybinding"
-$CH help | grep -q "prefix+alt+shift+b" && ok "help names the board tab keybinding" || fail "help names the board tab keybinding"
+chatter help --all | grep -q "chatter.open-chat-tab" && ok "full help names the tab action" || fail "full help names the tab action"
+chatter help --all | grep -q "placement split" && ok "full help names --placement split" || fail "full help names --placement split"
+chatter help | grep -q "prefix+alt+t" && ok "help names the tab keybinding" || fail "help names the tab keybinding"
+chatter help | grep -q "prefix+alt+b" && ok "help names the board keybinding" || fail "help names the board keybinding"
+chatter help | grep -q "prefix+alt+shift+b" && ok "help names the board tab keybinding" || fail "help names the board tab keybinding"
 CHATTER_ENTRY="$CHATTER_ENTRY" CHATTER_SOURCE_ENTRY="$CHATTER_ENTRY" node --no-warnings --experimental-sqlite "$ROOT/test/surface.js" >/dev/null \
   && ok "public command/hook/manifest surface is complete" || fail "public command/hook/manifest surface is complete"
 

@@ -15,11 +15,10 @@
     "build": "bun run clean && tsc -p tsconfig.build.json",
     "test:unit": "node --no-warnings --experimental-sqlite --test dist/test/**/*.test.js",
     "test:smoke": "sh test/smoke.sh",
-    "test:dist": "CHATTER_ENTRY=$PWD/dist/bin/chatter.js CHATTER_MODULE_ROOT=$PWD/dist/src sh test/smoke.sh",
     "test:differential": "sh test/differential.sh",
     "deadcode": "knip",
     "verify:artifacts": "node scripts/verify-artifacts.mjs",
-    "check": "bun run typecheck && bun run build && bun run test:unit && bun run test:smoke && bun run test:dist && bun run test:differential && bun run deadcode && bun run verify:artifacts"
+    "check": "bun run typecheck && bun run build && bun run test:unit && bun run test:smoke && bun run test:differential && bun run deadcode && bun run verify:artifacts"
   },
   "dependencies": {},
   "devDependencies": {

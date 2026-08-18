@@ -87,28 +87,24 @@ const tui_1 = require("../src/tui");
     strict_1.default.match(header, /#alpha/);
     strict_1.default.doesNotMatch(header, /\[\d+ /);
 });
-(0, node_test_1.default)('board is a compact overview ordered by agents, tasks, questions, then memory', () => {
+(0, node_test_1.default)('board is a compact overview ordered by agents, tasks, questions, then memory', (t) => {
     const dir = node_fs_1.default.mkdtempSync(node_path_1.default.join(node_os_1.default.tmpdir(), 'chatter-board-'));
+    t.after(() => node_fs_1.default.rmSync(dir, { recursive: true, force: true }));
     const file = node_path_1.default.join(dir, 'chatter.db');
     const d = (0, db_1.openDbFile)(file);
-    try {
-        d.prepare("INSERT INTO messages (from_agent, to_agent, body, kind, created_at) VALUES ('marc', '#chat', 'chat belongs elsewhere', 'chat', '2026-01-01 00:00:00')").run();
-        d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'question', 'question details stay out of the board', 'active', '2026-01-01 00:00:00')").run();
-        d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'decision', 'keep the board compact', 'active', '2026-01-01 00:00:01')").run();
-        const lines = (0, board_1.renderBoard)(d, file).map(tui_1.stripAnsi);
-        const agents = lines.findIndex((line) => line.trim() === 'Agents');
-        const tasks = lines.findIndex((line) => line.trim() === 'Tasks');
-        const questions = lines.findIndex((line) => line.trim() === 'Open questions  1');
-        const memory = lines.findIndex((line) => line.trim() === 'Shared memory');
-        strict_1.default.ok(agents < tasks && tasks < questions && questions < memory);
-        strict_1.default.ok(lines.some((line) => line.includes('keep the board compact')));
-        strict_1.default.ok(lines.every((line) => !line.includes('Group chat')));
-        strict_1.default.ok(lines.every((line) => !line.includes('chat belongs elsewhere')));
-        strict_1.default.ok(lines.every((line) => !line.includes('question details stay out of the board')));
-    }
-    finally {
-        node_fs_1.default.rmSync(dir, { recursive: true, force: true });
-    }
+    d.prepare("INSERT INTO messages (from_agent, to_agent, body, kind, created_at) VALUES ('marc', '#chat', 'chat belongs elsewhere', 'chat', '2026-01-01 00:00:00')").run();
+    d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'question', 'question details stay out of the board', 'active', '2026-01-01 00:00:00')").run();
+    d.prepare("INSERT INTO notes (author, type, text, status, created_at) VALUES ('marc', 'decision', 'keep the board compact', 'active', '2026-01-01 00:00:01')").run();
+    const lines = (0, board_1.renderBoard)(d, file).map(tui_1.stripAnsi);
+    const agents = lines.findIndex((line) => line.trim() === 'Agents');
+    const tasks = lines.findIndex((line) => line.trim() === 'Tasks');
+    const questions = lines.findIndex((line) => line.trim() === 'Open questions  1');
+    const memory = lines.findIndex((line) => line.trim() === 'Shared memory');
+    strict_1.default.ok(agents < tasks && tasks < questions && questions < memory);
+    strict_1.default.ok(lines.some((line) => line.includes('keep the board compact')));
+    strict_1.default.ok(lines.every((line) => !line.includes('Group chat')));
+    strict_1.default.ok(lines.every((line) => !line.includes('chat belongs elsewhere')));
+    strict_1.default.ok(lines.every((line) => !line.includes('question details stay out of the board')));
 });
 (0, node_test_1.default)('plugin views require an explicit focused repository context', () => {
     strict_1.default.equal((0, board_1.pluginContextCwd)('{}'), null);
