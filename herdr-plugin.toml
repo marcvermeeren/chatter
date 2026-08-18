@@ -2,7 +2,7 @@ id = "chatter"
 name = "Chatter"
 version = "0.19.0"
 min_herdr_version = "0.8.0"
-description = "Repo-scoped chat, shared memory, tasks, and handoffs for Herdr coding agents"
+description = "Repo-scoped chat, shared memory, tasks, and handoffs for Herdr agents"
 platforms = ["linux", "macos"]
 
 [[startup]]

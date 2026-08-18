@@ -1,10 +1,9 @@
-'use strict';
 // Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
 // input bar. `board` = read-only overview. Both use the flicker-free painter.
 
 import path from 'node:path';
 import { matchLive, herdr, pluginInvocationContext } from './herdr';
-import { gitInfo, repoDbFile, openDbFile, humanName } from './db';
+import { gitInfo, repoDbFile, openDbFile, openRepoDb, humanName } from './db';
 import { postToChat, teamAgents, sendMessage, nameCollisionAdvice, sanitizeName } from './team';
 import { taskLabel, buildBrief, spawnAgent, setRole } from './commands';
 import { toMs } from './util';
@@ -28,10 +27,8 @@ const padVis = (s: string, w: number): string => s + ' '.repeat(Math.max(1, w - 
 function dbFileForCwd(cwd: string): string | null {
   const g = gitInfo(cwd);
   if (!g.repoRoot) return null;
-  const file = repoDbFile(g.repoRoot);
-  openDbFile(file).prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
-    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
-  return file;
+  openRepoDb(g.repoRoot);
+  return repoDbFile(g.repoRoot);
 }
 
 export function pluginContextCwd(rawContext: string): string | null {

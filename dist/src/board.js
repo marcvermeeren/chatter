@@ -1,4 +1,6 @@
-'use strict';
+"use strict";
+// Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
+// input bar. `board` = read-only overview. Both use the flicker-free painter.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -45,8 +47,6 @@ exports.buildFeedLines = buildFeedLines;
 exports.nextWizardStep = nextWizardStep;
 exports.chatEscapeAction = chatEscapeAction;
 exports.renderBoard = renderBoard;
-// Popup views. `chat` = grouped, colored, scrollable conversation with a fixed
-// input bar. `board` = read-only overview. Both use the flicker-free painter.
 const node_path_1 = __importDefault(require("node:path"));
 const herdr_1 = require("./herdr");
 const db_1 = require("./db");
@@ -68,10 +68,8 @@ function dbFileForCwd(cwd) {
     const g = (0, db_1.gitInfo)(cwd);
     if (!g.repoRoot)
         return null;
-    const file = (0, db_1.repoDbFile)(g.repoRoot);
-    (0, db_1.openDbFile)(file).prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
-    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
-    return file;
+    (0, db_1.openRepoDb)(g.repoRoot);
+    return (0, db_1.repoDbFile)(g.repoRoot);
 }
 function pluginContextCwd(rawContext) {
     return (0, herdr_1.pluginInvocationContext)(rawContext).cwd;

@@ -1,4 +1,5 @@
-'use strict';
+"use strict";
+// Talk to Herdr through its CLI (argv arrays only — never a shell).
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.matchLive = exports.invalidateSessionAgents = exports.HERDR = exports.PLUGIN_ID = void 0;
 exports.herdr = herdr;
@@ -6,7 +7,6 @@ exports.isRecord = isRecord;
 exports.pluginInvocationContext = pluginInvocationContext;
 exports.sessionAgents = sessionAgents;
 exports.paneLabel = paneLabel;
-// Talk to Herdr through its CLI (argv arrays only — never a shell).
 const node_child_process_1 = require("node:child_process");
 exports.PLUGIN_ID = 'chatter';
 exports.HERDR = process.env.HERDR_BIN_PATH || 'herdr';

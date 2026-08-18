@@ -1,4 +1,3 @@
-'use strict';
 // Talk to Herdr through its CLI (argv arrays only — never a shell).
 
 import { spawnSync } from 'node:child_process';

@@ -1,4 +1,3 @@
-'use strict';
 // Durable state, scoped PER REPOSITORY: each repo gets its own SQLite DB under
 // the plugin state dir. Worktrees of one repo share a DB (keyed by the git
 // common dir); unrelated repos are isolated universes.
@@ -11,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { PLUGIN_ID, HERDR } from './herdr';
 import { die } from './util';
-import type { ChatterDb, FileRow, GitInfo } from './types';
+import type { ChatterDb, FileRow, GitInfo, ValueRow } from './types';
 
 // One git spawn: branch, worktree toplevel, and the shared common dir that
 // identifies the repo across all of its linked worktrees.
@@ -146,6 +145,31 @@ export function repoDbFile(repoRoot: string): string {
   return path.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
 }
 
+const recordRepoRoot = (d: ChatterDb, repoRoot: string): void => {
+  d.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
+    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(repoRoot);
+};
+
+// Open a repository universe and retain its human-readable source path. Agent
+// rows alone cannot identify repositories that have only human activity.
+export function openRepoDb(repoRoot: string): ChatterDb {
+  const d = openDbFile(repoDbFile(repoRoot));
+  recordRepoRoot(d, repoRoot);
+  return d;
+}
+
+// Databases created before the repo mark existed can still be identified from
+// their most recently seen agent. Keep that compatibility fallback in one place.
+export function storedRepoRoot(d: ChatterDb): string | null {
+  const mark = d.prepare<ValueRow>(
+    "SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'",
+  ).get();
+  if (mark?.value) return mark.value;
+  return d.prepare<{ repo_root: string }>(
+    'SELECT repo_root FROM agents WHERE repo_root IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1',
+  ).get()?.repo_root ?? null;
+}
+
 // Every per-repo DB currently on disk (for hooks and the board).
 export function listRepoDbFiles(): string[] {
   const dir = path.join(stateRoot(), 'repos');
@@ -161,11 +185,7 @@ export function db(): ChatterDb {
   if (_db) return _db;
   const g = gitInfo();
   if (!g.repoRoot) die('chatter is per-repo — run it inside a git repository');
-  _db = openDbFile(repoDbFile(g.repoRoot));
-  // Record which repo this universe belongs to (orphan detection in
-  // `chatter data` — agent rows alone miss human-only universes).
-  _db.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
-    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
+  _db = openRepoDb(g.repoRoot);
   return _db;
 }
 

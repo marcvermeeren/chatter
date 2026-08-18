@@ -1,4 +1,6 @@
-'use strict';
+"use strict";
+// Shared TUI primitives: flicker-free painting, a stable color system,
+// word-aware wrapping, and raw-mode key decoding.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.visWidth = exports.clean = exports.stripAnsi = exports.authorWithAvatar = exports.author = exports.agentAvatar = exports.AGENT_FACES = exports.field = exports.hint = exports.NEWMARK = exports.CYAN = exports.YELLOW = exports.GREEN = exports.FAINT = exports.CHROME = exports.bg = exports.fg = exports.INV = exports.BOLD = exports.RESET = void 0;
 exports.logoLines = logoLines;
@@ -7,8 +9,6 @@ exports.agentFace = agentFace;
 exports.wrap = wrap;
 exports.makePainter = makePainter;
 exports.decodeKey = decodeKey;
-// Shared TUI primitives: flicker-free painting, a stable color system,
-// word-aware wrapping, and raw-mode key decoding.
 const ESC = '\x1b';
 exports.RESET = `${ESC}[0m`;
 exports.BOLD = `${ESC}[1m`;

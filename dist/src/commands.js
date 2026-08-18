@@ -1,4 +1,5 @@
-'use strict';
+"use strict";
+// Agent-facing commands and plugin hooks.
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -38,7 +39,6 @@ exports.cmdForget = cmdForget;
 exports.flushAllRepos = flushAllRepos;
 exports.hookStartup = hookStartup;
 exports.hookFlush = hookFlush;
-// Agent-facing commands and plugin hooks.
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_os_1 = __importDefault(require("node:os"));
@@ -648,9 +648,7 @@ function repoUniverses() {
     return (0, db_1.listRepoDbFiles)().map((f) => {
         const d = (0, db_1.openDbFile)(f);
         const count = (t) => d.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.n ?? 0;
-        const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-        const root = mark ? { repo_root: mark.value }
-            : d.prepare('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1').get();
+        const repoRoot = (0, db_1.storedRepoRoot)(d);
         const last = d.prepare('SELECT MAX(created_at) AS t FROM messages').get()?.t
             || d.prepare('SELECT MAX(at) AS t FROM events').get()?.t;
         let bytes = 0;
@@ -663,8 +661,8 @@ function repoUniverses() {
         return {
             key: node_path_1.default.basename(node_path_1.default.dirname(f)),
             dir: node_path_1.default.dirname(f),
-            repo_root: root ? root.repo_root : null,
-            orphan: !!(root && root.repo_root && !node_fs_1.default.existsSync(root.repo_root)),
+            repo_root: repoRoot,
+            orphan: !!(repoRoot && !node_fs_1.default.existsSync(repoRoot)),
             messages: count('messages'), notes: count('notes'), tasks: count('tasks'), events: count('events'),
             last_activity: last || null,
             bytes,
@@ -765,8 +763,7 @@ function spawnAgent(me, { name: rawName, kind, purpose, tab = false, branch = nu
     }
     // The spawn target repo comes from the DB handle, never process.cwd():
     // inside the chat popup, cwd is the plugin's own checkout.
-    const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-    const repoRoot = (mark && mark.value) || (0, db_1.gitInfo)().repoRoot;
+    const repoRoot = (0, db_1.storedRepoRoot)(d) || (0, db_1.gitInfo)().repoRoot;
     if (!repoRoot || (0, db_1.repoDbFile)(repoRoot) !== (0, db_1.dbFile)(d)) {
         return fail('cannot determine this universe\'s repo — run one chatter command from a shell in it first');
     }
@@ -918,7 +915,7 @@ function cmdRole(me, args) {
 // -------------------------------------------------------------------- help
 function help(all = false) {
     if (!all)
-        return `chatter — repo-scoped coordination for coding agents
+        return `chatter — repo-scoped coordination for agents
 
 Common coordination:
   chatter agents                         roster, status and current task
@@ -943,7 +940,7 @@ Open board: prefix+alt+b popup · prefix+alt+shift+b tab
 
 Chatter carries context inside this repo; Git carries code between worktrees.
 Full command and placement reference: chatter help --all`;
-    return `chatter — repo-scoped chat, shared memory, tasks and handoffs for coding agents
+    return `chatter — repo-scoped chat, shared memory, tasks and handoffs for agents
 
   chatter agents [--all]                who's online: role, branch, task (--all incl. departed)
   chatter send <agent> <message...>     DM an agent (lands in their session; --queue for absent agents)

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-'use strict';
-// Chatter: Slack + shared memory for coding agents in Herdr worktrees.
+// Chatter: repo-scoped coordination for agents in Herdr worktrees.
 // Zero-dependency: Node 22 built-in node:sqlite, talks to Herdr via its CLI.
 // Entry point only — see src/ for the implementation.
 
@@ -10,6 +9,7 @@ import * as c from '../src/commands';
 import { cmdBoard, cmdChatView } from '../src/board';
 import * as s from '../src/setup';
 import { cmdUpdate } from '../src/update';
+import { logoLines } from '../src/tui';
 import type { Identity } from '../src/types';
 
 type Command = (identity: Identity, args: readonly string[]) => void;
@@ -64,7 +64,7 @@ function main(): void {
     if (helpArgs.some((arg) => arg !== '--all')) die('usage: chatter help [--all]');
     // Block art for a human at a terminal only: agents pipe `chatter help`
     // constantly, and a logo in their context window is pure token noise.
-    if (process.stdout.isTTY) console.log(s.logoLines(process.stdout.columns || 100).join('\n'));
+    if (process.stdout.isTTY) console.log(logoLines(process.stdout.columns || 100).join('\n'));
     console.log(c.help(helpArgs.includes('--all')));
     return;
   }

@@ -1,15 +1,17 @@
-'use strict';
 // Who agents are (identity) and how messages move between them (delivery).
 // Everything here operates within ONE repo's DB; cross-repo delivery is
 // deliberately refused.
 
 import path from 'node:path';
 import { herdr, sessionAgents, invalidateSessionAgents, paneLabel } from './herdr';
-import { db, dbFile, now, gitInfo, humanName, repoDbFile, logEvent, listRepoDbFiles, openDbFile } from './db';
+import {
+  db, dbFile, gitInfo, humanName, listRepoDbFiles, logEvent, now, openDbFile,
+  repoDbFile, storedRepoRoot,
+} from './db';
 import { die } from './util';
 import type {
-  AgentRow, AgentStatus, ChatterDb, CountRow, HandoffRow, Identity, LastReadRow,
-  LiveAgent, MessageRow, NameRow, PaneRow, ValueRow,
+  AgentStatus, ChatterDb, CountRow, HandoffRow, Identity, LastReadRow,
+  LiveAgent, MessageRow, NameRow, PaneRow,
 } from './types';
 
 // Does this live agent belong to the repo a DB handle serves?
@@ -120,10 +122,7 @@ function findNameConflict(name: string): NameConflict | null {
   for (const f of listRepoDbFiles()) {
     const d = openDbFile(f);
     if (!d.prepare<{ present: number }>('SELECT 1 AS present FROM agents WHERE name = ? AND departed_at IS NULL').get(name)) continue;
-    const mark = d.prepare<ValueRow>("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-    const row = mark ? null
-      : d.prepare<Pick<AgentRow, 'repo_root'>>('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL LIMIT 1').get();
-    const root = mark?.value || row?.repo_root;
+    const root = storedRepoRoot(d);
     const fallback = path.basename(path.dirname(f)).replace(/-[0-9a-f]{8}$/, '');
     return { kind: 'registered', repository: root ? path.basename(root) : fallback };
   }

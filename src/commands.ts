@@ -1,4 +1,3 @@
-'use strict';
 // Agent-facing commands and plugin hooks.
 
 import fs from 'node:fs';
@@ -9,7 +8,10 @@ import type { SQLInputValue } from 'node:sqlite';
 import {
   PLUGIN_ID, herdr, invalidateSessionAgents, isRecord, matchLive, pluginInvocationContext,
 } from './herdr';
-import { db, dbFile, now, gitInfo, repoDbFile, openDbFile, listRepoDbFiles, logEvent, configRoot, humanName } from './db';
+import {
+  configRoot, db, dbFile, gitInfo, humanName, listRepoDbFiles, logEvent, now,
+  openDbFile, repoDbFile, storedRepoRoot,
+} from './db';
 import {
   sendMessage, flushPending, resolveRecipient, postToChat, chatUnreadCount,
   nameTaken, nameCollisionAdvice, sanitizeName, teamAgents,
@@ -571,9 +573,7 @@ function repoUniverses(): RepoUniverse[] {
   return listRepoDbFiles().map((f) => {
     const d = openDbFile(f);
     const count = (t: string): number => d.prepare<CountRow>(`SELECT COUNT(*) AS n FROM ${t}`).get()?.n ?? 0;
-    const mark = d.prepare<ValueRow>("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-    const root = mark ? { repo_root: mark.value }
-      : d.prepare<Pick<AgentRow, 'repo_root'>>('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1').get();
+    const repoRoot = storedRepoRoot(d);
     const last = d.prepare<TimeRow>('SELECT MAX(created_at) AS t FROM messages').get()?.t
       || d.prepare<TimeRow>('SELECT MAX(at) AS t FROM events').get()?.t;
     let bytes = 0;
@@ -581,8 +581,8 @@ function repoUniverses(): RepoUniverse[] {
     return {
       key: path.basename(path.dirname(f)),
       dir: path.dirname(f),
-      repo_root: root ? root.repo_root : null,
-      orphan: !!(root && root.repo_root && !fs.existsSync(root.repo_root)),
+      repo_root: repoRoot,
+      orphan: !!(repoRoot && !fs.existsSync(repoRoot)),
       messages: count('messages'), notes: count('notes'), tasks: count('tasks'), events: count('events'),
       last_activity: last || null,
       bytes,
@@ -677,8 +677,7 @@ export function spawnAgent(
   }
   // The spawn target repo comes from the DB handle, never process.cwd():
   // inside the chat popup, cwd is the plugin's own checkout.
-  const mark = d.prepare<ValueRow>("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-  const repoRoot = (mark && mark.value) || gitInfo().repoRoot;
+  const repoRoot = storedRepoRoot(d) || gitInfo().repoRoot;
   if (!repoRoot || repoDbFile(repoRoot) !== dbFile(d)) {
     return fail('cannot determine this universe\'s repo — run one chatter command from a shell in it first');
   }
@@ -818,7 +817,7 @@ export function cmdRole(me: Identity, args: readonly string[]): void {
 // -------------------------------------------------------------------- help
 
 export function help(all = false): string {
-  if (!all) return `chatter — repo-scoped coordination for coding agents
+  if (!all) return `chatter — repo-scoped coordination for agents
 
 Common coordination:
   chatter agents                         roster, status and current task
@@ -844,7 +843,7 @@ Open board: prefix+alt+b popup · prefix+alt+shift+b tab
 Chatter carries context inside this repo; Git carries code between worktrees.
 Full command and placement reference: chatter help --all`;
 
-  return `chatter — repo-scoped chat, shared memory, tasks and handoffs for coding agents
+  return `chatter — repo-scoped chat, shared memory, tasks and handoffs for agents
 
   chatter agents [--all]                who's online: role, branch, task (--all incl. departed)
   chatter send <agent> <message...>     DM an agent (lands in their session; --queue for absent agents)

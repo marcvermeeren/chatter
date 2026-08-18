@@ -1,4 +1,7 @@
-'use strict';
+"use strict";
+// Who agents are (identity) and how messages move between them (delivery).
+// Everything here operates within ONE repo's DB; cross-repo delivery is
+// deliberately refused.
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -14,9 +17,6 @@ exports.formatDelivery = formatDelivery;
 exports.flushPending = flushPending;
 exports.sendMessage = sendMessage;
 exports.postToChat = postToChat;
-// Who agents are (identity) and how messages move between them (delivery).
-// Everything here operates within ONE repo's DB; cross-repo delivery is
-// deliberately refused.
 const node_path_1 = __importDefault(require("node:path"));
 const herdr_1 = require("./herdr");
 const db_1 = require("./db");
@@ -126,10 +126,7 @@ function findNameConflict(name) {
         const d = (0, db_1.openDbFile)(f);
         if (!d.prepare('SELECT 1 AS present FROM agents WHERE name = ? AND departed_at IS NULL').get(name))
             continue;
-        const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
-        const row = mark ? null
-            : d.prepare('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL LIMIT 1').get();
-        const root = mark?.value || row?.repo_root;
+        const root = (0, db_1.storedRepoRoot)(d);
         const fallback = node_path_1.default.basename(node_path_1.default.dirname(f)).replace(/-[0-9a-f]{8}$/, '');
         return { kind: 'registered', repository: root ? node_path_1.default.basename(root) : fallback };
     }

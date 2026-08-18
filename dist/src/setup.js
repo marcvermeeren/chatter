@@ -1,4 +1,5 @@
-'use strict';
+"use strict";
+// Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -36,13 +37,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.logoLines = void 0;
 exports.cmdDoctor = cmdDoctor;
 exports.cmdSetup = cmdSetup;
 exports.nextSetupStep = nextSetupStep;
 exports.wizard = wizard;
 exports.hookOpenSetup = hookOpenSetup;
-// Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
@@ -54,9 +53,6 @@ const T = __importStar(require("./tui"));
 const commands_1 = require("./commands");
 const team_1 = require("./team");
 const update_1 = require("./update");
-// The wordmark lives with the other painting primitives; re-exported here
-// because setup is where it was born and callers still ask for it.
-({ logoLines: exports.logoLines } = T);
 // -------------------------------------------------------------- config edits
 const configToml = () => node_path_1.default.join(node_os_1.default.homedir(), '.config', 'herdr', 'config.toml');
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -199,7 +195,7 @@ function renderChecks(checks) {
 }
 function cmdDoctor() {
     const width = process.stdout.columns || 100;
-    console.log((0, exports.logoLines)(width).join('\n'));
+    console.log(T.logoLines(width).join('\n'));
     const checks = doctorChecks();
     console.log(renderChecks(checks).join('\n'));
     const bad = checks.filter((c) => c.ok === false).length;
@@ -238,7 +234,7 @@ function cmdSetup(me, args) {
         'no-toasts': false, 'no-keybind': false,
     });
     const width = process.stdout.columns || 100;
-    console.log((0, exports.logoLines)(width).join('\n'));
+    console.log(T.logoLines(width).join('\n'));
     if (!opts.yes) {
         (0, util_1.die)('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
             + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"]\n'
@@ -310,7 +306,7 @@ function wizard() {
     };
     const field = T.field;
     const render = () => {
-        const out = [...(0, exports.logoLines)(width())];
+        const out = [...T.logoLines(width())];
         out.push(` ${T.BOLD}setup${T.RESET}`);
         out.push('');
         if (state.step === STEPS.NAME) {

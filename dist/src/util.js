@@ -1,4 +1,5 @@
-'use strict';
+"use strict";
+// Small shared helpers: flag parsing, output mode, time math.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.age = exports.toMs = exports.setJsonOut = void 0;
 exports.die = die;
@@ -6,7 +7,6 @@ exports.parseFlags = parseFlags;
 exports.emit = emit;
 exports.median = median;
 exports.fmtDur = fmtDur;
-// Small shared helpers: flag parsing, output mode, time math.
 function die(msg) { console.error(msg); process.exit(1); }
 // argv flags: defs with a boolean default are switches; others consume a value.
 function parseFlags(args, defs) {

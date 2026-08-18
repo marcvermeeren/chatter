@@ -1,4 +1,7 @@
-'use strict';
+"use strict";
+// Durable state, scoped PER REPOSITORY: each repo gets its own SQLite DB under
+// the plugin state dir. Worktrees of one repo share a DB (keyed by the git
+// common dir); unrelated repos are isolated universes.
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -10,12 +13,11 @@ exports.humanName = humanName;
 exports.stateRoot = stateRoot;
 exports.openDbFile = openDbFile;
 exports.repoDbFile = repoDbFile;
+exports.openRepoDb = openRepoDb;
+exports.storedRepoRoot = storedRepoRoot;
 exports.listRepoDbFiles = listRepoDbFiles;
 exports.db = db;
 exports.logEvent = logEvent;
-// Durable state, scoped PER REPOSITORY: each repo gets its own SQLite DB under
-// the plugin state dir. Worktrees of one repo share a DB (keyed by the git
-// common dir); unrelated repos are isolated universes.
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_os_1 = __importDefault(require("node:os"));
@@ -168,6 +170,25 @@ function openDbFile(file) {
 function repoDbFile(repoRoot) {
     return node_path_1.default.join(stateRoot(), 'repos', repoKey(repoRoot), 'chatter.db');
 }
+const recordRepoRoot = (d, repoRoot) => {
+    d.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
+    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(repoRoot);
+};
+// Open a repository universe and retain its human-readable source path. Agent
+// rows alone cannot identify repositories that have only human activity.
+function openRepoDb(repoRoot) {
+    const d = openDbFile(repoDbFile(repoRoot));
+    recordRepoRoot(d, repoRoot);
+    return d;
+}
+// Databases created before the repo mark existed can still be identified from
+// their most recently seen agent. Keep that compatibility fallback in one place.
+function storedRepoRoot(d) {
+    const mark = d.prepare("SELECT value FROM ui_marks WHERE agent = '_repo' AND mark = 'root'").get();
+    if (mark?.value)
+        return mark.value;
+    return d.prepare('SELECT repo_root FROM agents WHERE repo_root IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1').get()?.repo_root ?? null;
+}
 // Every per-repo DB currently on disk (for hooks and the board).
 function listRepoDbFiles() {
     const dir = node_path_1.default.join(stateRoot(), 'repos');
@@ -185,11 +206,7 @@ function db() {
     const g = gitInfo();
     if (!g.repoRoot)
         (0, util_1.die)('chatter is per-repo — run it inside a git repository');
-    _db = openDbFile(repoDbFile(g.repoRoot));
-    // Record which repo this universe belongs to (orphan detection in
-    // `chatter data` — agent rows alone miss human-only universes).
-    _db.prepare(`INSERT INTO ui_marks (agent, mark, value) VALUES ('_repo', 'root', ?)
-    ON CONFLICT(agent, mark) DO UPDATE SET value = excluded.value`).run(g.repoRoot);
+    _db = openRepoDb(g.repoRoot);
     return _db;
 }
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);

@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-'use strict';
+"use strict";
+// Chatter: repo-scoped coordination for agents in Herdr worktrees.
+// Zero-dependency: Node 22 built-in node:sqlite, talks to Herdr via its CLI.
+// Entry point only — see src/ for the implementation.
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -34,15 +37,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-// Chatter: Slack + shared memory for coding agents in Herdr worktrees.
-// Zero-dependency: Node 22 built-in node:sqlite, talks to Herdr via its CLI.
-// Entry point only — see src/ for the implementation.
 const util_1 = require("../src/util");
 const team_1 = require("../src/team");
 const c = __importStar(require("../src/commands"));
 const board_1 = require("../src/board");
 const s = __importStar(require("../src/setup"));
 const update_1 = require("../src/update");
+const tui_1 = require("../src/tui");
 // Message content is sacred: commands whose args are free text never have
 // flags plucked out of them. Everything else accepts --json anywhere.
 const CONTENT_CMDS = new Set(['send', 'post', 'ask', 'answer']);
@@ -90,7 +91,7 @@ function main() {
         // Block art for a human at a terminal only: agents pipe `chatter help`
         // constantly, and a logo in their context window is pure token noise.
         if (process.stdout.isTTY)
-            console.log(s.logoLines(process.stdout.columns || 100).join('\n'));
+            console.log((0, tui_1.logoLines)(process.stdout.columns || 100).join('\n'));
         console.log(c.help(helpArgs.includes('--all')));
         return;
     }

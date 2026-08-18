@@ -1,4 +1,3 @@
-'use strict';
 // Premium onboarding: setup wizard (popup TUI + CLI fallback) and doctor.
 
 import fs from 'node:fs';
@@ -13,10 +12,6 @@ import { ensurePointerAndSymlink } from './commands';
 import { nameTaken } from './team';
 import { registration, updateStatus } from './update';
 import type { Identity } from './types';
-
-// The wordmark lives with the other painting primitives; re-exported here
-// because setup is where it was born and callers still ask for it.
-export const { logoLines } = T;
 
 // -------------------------------------------------------------- config edits
 
@@ -155,7 +150,7 @@ function renderChecks(checks: readonly DoctorCheck[]): string[] {
 
 export function cmdDoctor(): void {
   const width = process.stdout.columns || 100;
-  console.log(logoLines(width).join('\n'));
+  console.log(T.logoLines(width).join('\n'));
   const checks = doctorChecks();
   console.log(renderChecks(checks).join('\n'));
   const bad = checks.filter((c) => c.ok === false).length;
@@ -201,7 +196,7 @@ export function cmdSetup(me: Identity, args: readonly string[]): void {
     'no-toasts': false, 'no-keybind': false,
   });
   const width = process.stdout.columns || 100;
-  console.log(logoLines(width).join('\n'));
+  console.log(T.logoLines(width).join('\n'));
   if (!opts.yes) {
     die('interactive setup runs as the Herdr wizard:  herdr plugin action invoke chatter.setup\n'
       + 'non-interactive here:  chatter setup --yes [--name X] [--key "prefix+alt+c"]\n'
@@ -279,7 +274,7 @@ export function wizard(): void {
   };
   const field = T.field;
   const render = () => {
-    const out = [...logoLines(width())];
+    const out = [...T.logoLines(width())];
     out.push(` ${T.BOLD}setup${T.RESET}`);
     out.push('');
     if (state.step === STEPS.NAME) {

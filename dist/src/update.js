@@ -1,4 +1,12 @@
-'use strict';
+"use strict";
+// Keeping this machine's copy of chatter current.
+//
+// Herdr installs plugins two ways and the registry remembers which: a GitHub
+// install (reinstall IS the upgrade in Herdr's model) or a linked working tree
+// (fast-forward, then re-register the manifest). One command covers both.
+//
+// Nothing here touches your data: config, names and the per-repo universes all
+// live outside the checkout, so an upgrade never sees them.
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -8,14 +16,6 @@ exports.manifestVersion = manifestVersion;
 exports.updateStatus = updateStatus;
 exports.runUpdate = runUpdate;
 exports.cmdUpdate = cmdUpdate;
-// Keeping this machine's copy of chatter current.
-//
-// Herdr installs plugins two ways and the registry remembers which: a GitHub
-// install (reinstall IS the upgrade in Herdr's model) or a linked working tree
-// (fast-forward, then re-register the manifest). One command covers both.
-//
-// Nothing here touches your data: config, names and the per-repo universes all
-// live outside the checkout, so an upgrade never sees them.
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
 const node_child_process_1 = require("node:child_process");

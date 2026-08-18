@@ -1,4 +1,3 @@
-'use strict';
 // Keeping this machine's copy of chatter current.
 //
 // Herdr installs plugins two ways and the registry remembers which: a GitHub

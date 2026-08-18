@@ -1,4 +1,3 @@
-'use strict';
 // Shared TUI primitives: flicker-free painting, a stable color system,
 // word-aware wrapping, and raw-mode key decoding.
 

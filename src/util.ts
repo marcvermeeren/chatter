@@ -1,4 +1,3 @@
-'use strict';
 // Small shared helpers: flag parsing, output mode, time math.
 
 export function die(msg: string): never { console.error(msg); process.exit(1); }
